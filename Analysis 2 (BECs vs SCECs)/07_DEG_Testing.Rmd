@@ -1,0 +1,467 @@
+---
+title: "SCEC and BEC Differential Expression Testing"
+author: "Bono"
+date: "12/06/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This is the scRNA-seq analysis workflow for comparing human brain endothelial cells vs human spinal cord endothelial cells from our integrated object. This allows for better understanding of how neurovascular functions are contributed by selected populations of ECs. 
+
+* Find the DEGs within each cluster
+* Generate visualization
+* Perform GSEA on each cluster DEGs
+
+
+```{r}
+mypal <- pal_npg("nrc", alpha = 0.7)(10)
+mypal2 <-pal_tron("legacy", alpha = 0.7)(7)
+mypal3 <- pal_lancet("lanonc", alpha = 0.7)(9)
+mypal4 <- pal_simpsons(palette = c("springfield"), alpha = 0.7)(16)
+mypal5 <- pal_rickandmorty(palette = c("schwifty"), alpha = 0.7)(6)
+mypal6 <- pal_futurama(palette = c("planetexpress"), alpha = 0.7)(5)
+mypal7 <- pal_startrek(palette = c("uniform"), alpha = 0.7)(5)
+mycoloursP<- c(mypal, mypal2, mypal3, mypal4, mypal5, mypal6, mypal7)
+show_col(mycoloursP, labels =F)
+```
+
+
+```{r, include=FALSE}
+load_lib <- "Load Libraries"
+```
+#`r load_lib`
+
+```{r load_lib, message=FALSE}
+library(Seurat) 
+library(dplyr)
+library(scater)
+library(SingleCellExperiment)
+library(here)
+library(ggplot2)
+library(scran)
+library(stringr)
+library(gtools)
+library(scSorter)
+library(MAST)
+library(VennDetail)
+library(gridExtra)
+library(grid)
+library(fgsea)
+library(msigdbr)
+library(clusterProfiler)
+library(GSEABase)
+library(ensembldb)
+library(org.Hs.eg.db)
+library(enrichplot)
+```
+
+
+#Import integrated dataset containing BEC and SCEC
+```{r}
+ECs_comb <- readRDS(here("data/int_ECs.RDS"))
+
+DefaultAssay(ECs_comb) <- "RNA"
+```
+
+
+#Perform GSEA on EC subtype between BEC and SCEC (global DE testing)
+```{r}
+ECs_comb$sub_tis <- paste(ECs_comb$subtype, ECs_comb$Tissues, sep = "-")
+```
+
+
+```{r}
+Idents(ECs_comb) <- "Tissues"
+VlnPlot(ECs_comb, features = c("CCN2", "COLEC12", "TJP1"))
+```
+#Pre-processing of integrated dataset on "RNA" assay
+```{r, message= FALSE}
+ECs_comb <- FindVariableFeatures(ECs_comb, selection.method = "vst", nfeatures = 2000)
+all_genes <- rownames(ECs_comb)
+ECs_comb <- ScaleData(ECs_comb, verbose = FALSE)
+```
+
+```{r, include=FALSE}
+DE <- "Differential Expressing Testing"
+```
+# `r DE`
+
+
+#DEGs genes in cluster 4 (arterial-like SCEC)
+```{r, message=FALSE}
+Idents(ECs_comb) <- "integrated_snn_res.0.45"
+
+DEG_clust4 <- FindMarkers(ECs_comb, ident.1 = 4, min.pct = 0.25, verbose = FALSE, test.use = "MAST")
+
+DEG_clust4_up <- DEG_clust4[DEG_clust4$p_val_adj < 0.05 & 
+                            DEG_clust4$avg_log2FC > 1 &
+                            (DEG_clust4$pct.1 - DEG_clust4$pct.2) > 0,]
+
+DEG_clust4_up
+
+DEG_clust4_down <- DEG_clust4[DEG_clust4$p_val_adj < 0.05 & 
+                              DEG_clust4$avg_log2FC < -1,]
+
+DEG_clust4_down
+```
+
+
+#DEGs genes in cluster 5 (vein-like SCEC)
+```{r, message=FALSE}
+DEG_clust5 <- FindMarkers(ECs_comb, ident.1 = 5, min.pct = 0.25, verbose = FALSE, test.use = "MAST")
+
+DEG_clust5_up <- DEG_clust5[DEG_clust5$p_val_adj < 0.05 & 
+                            DEG_clust5$avg_log2FC > 1 &
+                            (DEG_clust5$pct.1 - DEG_clust5$pct.2) > 0,]
+
+DEG_clust5_up
+
+DEG_clust5_down <- DEG_clust5[DEG_clust5$p_val_adj < 0.05 & 
+                             (DEG_clust5$pct.1 - DEG_clust5$pct.2) < 0 &
+                              DEG_clust5$avg_log2FC < -1,]
+
+DEG_clust5_down
+```
+
+
+#DEGs genes in cluster 6 (vein BEC)
+```{r, message= FALSE}
+DEG_clust6 <- FindMarkers(ECs_comb, ident.1 = 6, min.pct = 0.25, verbose = FALSE, test.use = "MAST")
+
+DEG_clust6_up <- DEG_clust6[DEG_clust6$p_val_adj < 0.05 & 
+                            DEG_clust6$avg_log2FC > 1,]
+
+DEG_clust6_up
+
+DEG_clust6_down <- DEG_clust6[DEG_clust6$p_val_adj < 0.05 & 
+                             (DEG_clust6$pct.1 - DEG_clust6$pct.2) < 0 &
+                              DEG_clust6$avg_log2FC < -1,]
+
+DEG_clust6_down
+```
+
+
+#Find all DEGs in each cluster
+```{r, message = FALSE}
+all_DEGs <- FindAllMarkers(ECs_comb, min.pct = 0.25, test.use = "MAST", verbose = FALSE, logfc.threshold = 1)
+
+up_DEGs <- all_DEGs[all_DEGs$p_val_adj < 0.05 &
+                    all_DEGs$avg_log2FC > 1 &
+                    (all_DEGs$pct.1 - all_DEGs$pct.2) > 0,]
+
+
+down_DEGs <- all_DEGs[all_DEGs$p_val_adj < 0.05 &
+                    all_DEGs$avg_log2FC < -1 &
+                    (all_DEGs$pct.1 - all_DEGs$pct.2) < 0,]
+
+
+top25 <- up_DEGs%>% group_by(cluster) %>% top_n(n = 25, wt= avg_log2FC)
+unique(top25)
+```
+
+
+```{r}
+ECs_comb <- RenameIdents(ECs_comb, 
+                         "0" = "Capillary A",
+                         "1" = "Capillary B",
+                         "2" = "Capillary C",
+                         "3" = "Capillary D",
+                         "4" = "Arterial-SCEC",
+                         "5" = "Vein-SCEC",
+                         "6" = "Vein-BEC",
+                         "7" = "Unnanotate")
+```
+
+
+#Generate heatmap showing differences
+```{r}
+DefaultAssay(ECs_comb) <- "integrated"
+
+ECs_comb_small <- subset(ECs_comb, downsample= 50)
+
+do_hm <- DoHeatmap(ECs_comb, features = top25$gene, label = TRUE, cells = Cells(ECs_comb_small), size = 3)
+do_hm + theme(axis.text.y = element_text(size = 4))
+
+DefaultAssay(ECs_comb) <- "RNA"
+```
+
+
+```{r, include=FALSE}
+DEG_table <- "DEG Table"
+```
+# `r DEG_table`
+
+* Cluster 4 = arterial BEC
+* Cluster 5 = vein SCEC
+* Cluster 6 = arterial SCEC
+
+
+#Identify top DEGs in our cluster of interest
+```{r}
+clust4_top10 <- DEG_clust4_up[1:10,]
+clust4_down10 <- DEG_clust4_down[1:10,]
+Arterial_SCEC <- c(rownames(clust4_top10), rownames(clust4_down10))
+
+clust5_top10 <- DEG_clust5_up[1:10, ]
+clust5_down10 <- DEG_clust5_down[c(7, 8, 10, 11, 13, 14, 15, 16, 17, 18),]
+Vein_SCEC <- c(rownames(clust5_top10), rownames(clust5_down10))
+
+clust6_top10 <- DEG_clust6_up[1:10, ]
+clust6_down10 <- DEG_clust6_down[c(1,2,3,5,6,7,8,9,10,11),]
+Vein_BEC <- c(rownames(clust6_top10), rownames(clust6_down10))
+
+DEG_df <- data.frame(Arterial_SCEC, Vein_SCEC, Vein_BEC)
+colnames(DEG_df) <- c("Arterial SCEC", "Vein SCEC", "Vein BEC")
+
+DEG_df
+```
+
+
+#Generate DEG table
+```{r}
+t1 <- ttheme_default(
+        #Set color for table holding DEGs
+        core=list(
+        bg_params = list(fill=c(rep("lightsalmon",
+                                    length.out=10), rep("lightskyblue3", length.out=10)),
+                         alpha = 0.5)),
+        #Change column header to 
+        colhead = list(fg_params=list(col="white"),
+                       bg_params=list(fill = "dimgrey"))
+        )
+
+
+grid.table(DEG_df[,1:3], theme = t1)
+```
+
+
+```{r, include=FALSE}
+GSEA <- "Perform GSEA"
+```
+# `r GSEA`
+
+
+#Perform GSEA 
+#Use MSigdb
+#Use KEGG
+
+
+#Cluster 4
+#Perform MSigdb
+```{r, warning= FALSE}
+gmtfile <- "data/h.all.v7.4.symbols.gmt.txt"   #Load homosapien hallmark file
+
+geneset <- read.gmt.wp(here(gmtfile))
+
+geneset <- geneset[,c(1,5)]  #Obtain hallmark annotations
+```
+
+
+#Format DEG list
+```{r}
+#Upregulated genes in cluster 4
+clust4_upreg <- DEG_clust4_up$avg_log2FC
+
+names(clust4_upreg) <- toupper(rownames(DEG_clust4_up))
+
+clust4_upreg <- sort(clust4_upreg, decreasing = T)
+
+hs <- org.Hs.eg.db
+
+clust4up_entrez <- select(hs, keys = names(clust4_upreg), columns = "ENTREZID", keytype =  "SYMBOL")
+
+#Downregulated genes in cluster 4
+clust4_down <- DEG_clust4_down$avg_log2FC
+
+names(clust4_down) <- toupper(rownames(DEG_clust4_down))
+
+clust4_down <- sort(clust4_down, decreasing = T)
+
+hs <- org.Hs.eg.db
+
+clust4down_entrez <- select(hs, keys = names(clust4_down), columns = "ENTREZID", keytype =  "SYMBOL")
+```
+
+
+```{r}
+egmt <- GSEA(clust4_upreg, TERM2GENE = geneset,
+             minGSSize = 1,
+             pvalueCutoff = 0.05,
+             verbose = FALSE,
+             scoreType = "pos"
+             )
+
+
+gsea_results_df <- egmt@result
+rownames(gsea_results_df)
+
+egmt <- GSEA(clust4_down, TERM2GENE = geneset,
+             minGSSize = 1,
+             pvalueCutoff = 0.05,
+             verbose = FALSE,
+             scoreType = "pos"
+             )
+
+
+gsea_results_df <- egmt@result
+rownames(gsea_results_df)
+```
+
+
+#Perform GO (upregulated genes)
+```{r}
+clust4_GO_up <- enrichGO(gene =clust4up_entrez$ENTREZID, OrgDb = hs, pvalueCutoff = 0.05, ont = "all")
+clust4_GO_up <- setReadable(clust4_GO_up, OrgDb = hs)
+
+barplot(clust4_GO_up, split = "ONTOLOGY", showCategory = 5, color = "qvalue") + facet_grid(ONTOLOGY~., scale='free') + ggtitle("Arterial SCEC Gene Ontology") + theme(plot.title = element_text(hjust = 0.5, face = "bold")) + theme(axis.text.y = element_text(size = 14)) + xlab("Gene count")
+
+DotPlot(ECs_comb, features = c("VCAM1", "FBLN5", "LTBP4", "PTK2", "DST", "FGF2", "ADAM17", "VEGFC", "NR4A1", "HIF1A", "BMP6"), dot.scale = ) + scale_colour_gradient2(low = "deepskyblue", high = "orangered3") + theme(axis.title = element_blank(), axis.text.y = element_text(size = 13), axis.text.x = element_text(size = 12)) + scale_size(range= c(0,9))
+
+#########################
+#Compare expression of FBLN5 and LTBP4 expression between arterial-BEC vs arterial-SCEC
+arterial <- subset(ECs_comb, subset=(sub_tis=="Arterial-BEC" | sub_tis=="Arterial-SCEC"))
+Idents(arterial) <- "sub_tis"
+DefaultAssay(arterial) <- "integrated"
+
+FBLN5_vln <- VlnPlot(arterial, features = "FBLN5", pt.size = 0, cols = mycoloursP[c(8,2)]) + NoLegend()
+
+DefaultAssay(arterial) <- "RNA"
+
+LTBP4_vln <- VlnPlot(arterial, features = "LTBP4", pt.size = 0, cols = mycoloursP[c(8,2)]) + NoLegend()
+
+gridExtra::grid.arrange(FBLN5_vln, LTBP4_vln, ncol = 2)
+```
+
+
+
+#Cluster 5
+#Format DEG list
+```{r}
+#Upregulated genes in cluster 4
+clust5_upreg <- DEG_clust5_up$avg_log2FC
+
+names(clust5_upreg) <- toupper(rownames(DEG_clust5_up))
+
+clust5_upreg <- sort(clust5_upreg, decreasing = T)
+
+hs <- org.Hs.eg.db
+
+clust5up_entrez <- select(hs, keys = names(clust5_upreg), columns = "ENTREZID", keytype =  "SYMBOL")
+
+#Downregulated genes in cluster 4
+clust5_down <- DEG_clust5_down$avg_log2FC
+
+names(clust5_down) <- toupper(rownames(DEG_clust5_down))
+
+clust5_down <- sort(clust5_down, decreasing = T)
+
+hs <- org.Hs.eg.db
+
+clust5down_entrez <- select(hs, keys = names(clust5_down), columns = "ENTREZID", keytype =  "SYMBOL")
+```
+
+```{r}
+clust5_GO_up <- enrichGO(gene =clust5up_entrez$ENTREZID, OrgDb = hs, pvalueCutoff = 0.05, ont = "all")
+clust5_GO_up <- setReadable(clust5_GO_up, OrgDb = hs)
+
+barplot(clust5_GO_up, split = "ONTOLOGY", showCategory = clust5_GO_up@result$Description[c(1, 2, 3,5,7,373,374,375,376,377,378,379,380)], color = "qvalue") + facet_grid(ONTOLOGY~., scale='free') + ggtitle("Vein SCEC Gene Ontology") + theme(plot.title = element_text(hjust = 0.5, face = "bold")) + theme(axis.text.y = element_text(size = 14)) + xlab("Gene count")
+
+DotPlot(ECs_comb, features = c("FOXO1", "JUN", "HSPA5", "TXNIP", "CDKN1A", "JAK1", "HSPA8", "SMAD3", "UBB", "VCL", "UBE2B", "SQSTM1", "NFKBIA", "HIF1A", "UBC", "AKAP12", "EGR1", "GBP2", "NFKB1", "RPS6KA5", "IRAK2", "MAP3K8")) + 
+    scale_colour_gradient2(low = "deepskyblue", high = "orangered3") + 
+    theme(axis.title = element_blank(), axis.text.y = element_text(size = 13),  axis.text.x = element_text(size=13, angle = 45, hjust = 1))  + scale_size(range= c(0,9))
+
+##############################
+
+#Compare marker expression between vein-BEC and vein-SCEC
+vein <- subset(ECs_comb, subset=(sub_tis=="Vein-BEC" | sub_tis=="Vein-SCEC"))
+Idents(vein) <- "sub_tis"
+
+VlnPlot(vein, features = c("SQSTM1", "FOXO1", "UBB", "UBC", "UBE2B", "EGR1", "JUN", "HSPA5", "HSPA8"), ncol = 3, pt.size = 0.1, cols = mycoloursP[c(8,2)]) & theme(axis.title.x = element_blank())
+```
+
+
+#Cluster 6
+#Format DEG list
+```{r}
+#Upregulated genes in cluster 4
+clust6_upreg <- DEG_clust6_up$avg_log2FC
+
+names(clust6_upreg) <- toupper(rownames(DEG_clust6_up))
+
+clust6_upreg <- sort(clust6_upreg, decreasing = T)
+
+hs <- org.Hs.eg.db
+
+clust6up_entrez <- select(hs, keys = names(clust6_upreg), columns = "ENTREZID", keytype =  "SYMBOL")
+
+#Downregulated genes in cluster 4
+clust6_down <- DEG_clust6_down$avg_log2FC
+
+names(clust6_down) <- toupper(rownames(DEG_clust6_down))
+
+clust6_down <- sort(clust6_down, decreasing = T)
+
+hs <- org.Hs.eg.db
+
+clust6down_entrez <- select(hs, keys = names(clust6_down), columns = "ENTREZID", keytype =  "SYMBOL")
+```
+
+
+#Perform GO 
+```{r}
+clust6_GO_up <- enrichGO(gene =clust6up_entrez$ENTREZID, OrgDb = hs, pvalueCutoff = 0.05, ont = "all")
+clust6_GO_up <- setReadable(clust6_GO_up, OrgDb = hs)
+
+barplot(clust6_GO_up, split = "ONTOLOGY", showCategory = clust6_GO_up@result$Description[c(2,3,4,5,6,121,122,123,124,125,126,127,128)], color = "qvalue") + facet_grid(ONTOLOGY~., scale='free') + ggtitle("Vein BEC Gene Ontology") + theme(plot.title = element_text(hjust = 0.5, face="bold")) + theme(axis.text.y = element_text(size = 14)) + xlab("Gene count")
+
+DotPlot(ECs_comb, features = c("EDN1", "SVIL", "PDE4B", "DLC1", "SSH1", "CACNA1C", "CCDC88A", "ICAM1", "CCN2", "CX3CL1", "EDIL3", "ITGA2", "SPP1")) + scale_colour_gradient2(low = "deepskyblue", high = "orangered3") + theme(axis.title = element_blank(), axis.text.y = element_text(size = 13),  axis.text.x = element_text(size=13, angle = 45, hjust = 1))  + scale_size(range= c(0,11))
+
+#####################################################
+vein <- subset(ECs_comb, subset=(sub_tis=="Vein-BEC" | sub_tis=="Vein-SCEC"))
+
+Idents(vein) <- "sub_tis"
+
+VlnPlot(vein, features = c("ADAMTS9", "COL4A1", "COL4A2", "TIMP1", "LAMC1"), ncol = 3, pt.size = 0.1, cols = mycoloursP[c(8,2)]) & theme(axis.title.x = element_blank())
+```
+
+
+```{r}
+arterial <- subset(ECs_comb, subset = (sub_tis == "Arterial-BEC" | sub_tis == "Arterial-SCEC"))
+
+Idents(arterial) <- "sub_tis"
+
+art_DEGs <- FindMarkers(arterial, ident.1 = "Arterial-BEC", ident.2 = "Arterial-SCEC", test.use = "MAST", logfc.threshold = 1)
+
+art_BEC_DEGs <- art_DEGs[art_DEGs$p_val_adj < 0.05 & (art_DEGs$pct.1 - art_DEGs$pct.2) > 0 & art_DEGs$avg_log2FC > 1,]
+
+art_BEC_DEGs
+
+art_SCEC_DEGs <- art_DEGs[art_DEGs$p_val_adj < 0.05 & (art_DEGs$pct.1 - art_DEGs$pct.2) < 0 & art_DEGs$avg_log2FC < -1,]
+
+art_SCEC_DEGs
+
+
+artSCEC_upreg <- art_SCEC_DEGs$avg_log2FC
+names(artSCEC_upreg) <- toupper(rownames(art_SCEC_DEGs))
+artSCEC_upreg <- sort(artSCEC_upreg, decreasing = T)
+hs <- org.Hs.eg.db
+
+artSCEC_upreg_entrez <- select(hs, keys = names(artSCEC_upreg), columns = "ENTREZID", keytype =  "SYMBOL")
+```
+
+
+```{r}
+artSCEC_GO_up <- enrichGO(gene =artSCEC_upreg_entrez$ENTREZ, OrgDb = hs, pvalueCutoff = 0.05, ont = "all")
+artSCEC_GO_up <- setReadable(artSCEC_GO_up, OrgDb = hs)
+
+barplot(artSCEC_GO_up, split = "ONTOLOGY", showCategory = 5) + facet_grid(ONTOLOGY~., scale='free') + ggtitle("Vein BEC") + theme(plot.title = element_text(hjust = 0.5, face="bold")) + theme(axis.text.y = element_text(size = 14))
+```
+
+
+
+
+
+

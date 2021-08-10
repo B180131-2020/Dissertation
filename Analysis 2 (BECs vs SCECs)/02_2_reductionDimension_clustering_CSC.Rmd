@@ -1,0 +1,409 @@
+---
+title: "Distinguish endothelial cells and pericytes in CSC endo-pericyte populations"
+author: "Bono"
+date: "23/05/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This is the scRNA-seq analysis workflow for comparing human brain endothelial cells vs human spinal cord endothelial cells. This allows for better understanding of how neurovascular functions are contributed by selected populations of EC populations. Required packages involve Seurat and Bioconductor. 
+
+* This script attempts to characterize endothelial cells and pericytes within populations of both
+CSC.
+
+
+```{r, include=FALSE}
+load_lib <- "Load Libraries"
+```
+
+
+```{r load_lib, message=FALSE}
+library(Seurat) 
+library(dplyr)
+library(scater)
+library(SingleCellExperiment)
+library(here)
+library(ggplot2)
+library(scran)
+library(stringr)
+library(clustree)
+```
+
+
+```{r, include=FALSE}
+load_data <- "Load BA4 & CSC endothelial-pericyte populations"
+```
+## `r load_data`
+* Load the QC-ed and normalised EC-dataset of CSC populations from Luise's dataset.
+* Here we save the CSC endo-pericyte_1 and endo-pericyte_2 populations into a SeuratObjects for clustering.
+
+
+```{r load_data, echo=TRUE}
+BA4_CSC <- readRDS(here("data/BA4_CSC_QC.RDS")) #Load entire dataset
+Idents(BA4_CSC) <- "clusters_named" #Set identity to clusters_named column on metadata
+CSC <- subset(x = BA4_CSC, subset=Tissue=="CSC")
+```
+
+
+```{r, include=FALSE}
+cluster_EC_Peri <- "Distinguish Endothelial Cells and Pericytes in CSC Endo-Pericyte Population"
+```
+## `r cluster_EC_Peri`
+Aims to distinguish between endothelial cells and pericytes of SCEC (CSC), through feature selection, dimension reduction, and clustering analysis.
+
+* First identified the top 2000 highly variable genes in the endo-pericyte_1 & 2 populations through a local polynomial regression (loess)
+* Scale data using a linear model
+* Perform PCA
+* Use the first 20 principal components for clustering analysis
+* FindNeighbors (identify cell to cell connections using KNN)
+* FindClusters (deconvolute graph using Louvain algorithm)
+* Generate UMAP (at resolutions of 0.05, 0.1, and 0.2)
+
+
+```{r cluster_EC_Peri, message=FALSE}
+CSC <- FindVariableFeatures(CSC, selection.method = "vst", nfeatures = 2000)
+top10_vg <- head(VariableFeatures(CSC), 10)
+top10_vg
+```
+
+
+###################### Using Bioconductor to calculate top HVGs #############################
+```{r}
+CSC_sce <- as.SingleCellExperiment(CSC)
+dec_CSC <- modelGeneVar(CSC_sce)
+
+#Visualizing the fit:
+fit.CSC <- metadata(dec_CSC)
+plot(fit.CSC$mean, fit.CSC$var, xlab="Mean of log-expression", ylab= "Variance of log-expression")
+curve(fit.CSC$trend(x), col="dodgerblue", add=TRUE, lwd=2)
+```
+
+
+Identify top HVGs using Bioconductor
+```{r}
+HVG_sce <- getTopHVGs(dec_CSC, n=2000)
+head(HVG_sce, 10)
+```
+############################################################################################
+
+
+Plot HVGs from Seurat with and without labels
+```{r, fig.width = 15, fig.height= 8, message= FALSE, warning=FALSE}
+var_genes <- VariableFeaturePlot(CSC)
+labels <- LabelPoints(plot = var_genes, points = top10_vg, repel = TRUE)
+var_genes + labels
+```
+
+
+```{r, include=FALSE}
+PCA <- "Perform PCA"
+```
+## `r PCA`
+Scale the data 
+
+* Shifts the expression of each gene, so that the mean expression across cells is 0
+* Scales the expression of each gene, so that the variance across cells is 1
+
+
+```{r, message=FALSE}
+all.genes <- rownames(CSC)
+CSC <- ScaleData(CSC, features = all.genes) #save all variable genes 
+```
+
+
+Perform linear dimension reduction (PCA)
+```{r, message=FALSE}
+CSC <- RunPCA(CSC, features = VariableFeatures(object=CSC))
+```
+
+
+```{r, include=FALSE}
+visualize <- "Visualization"
+```
+## `r visualize`
+View the top genes associated with principal components 1 and 2.
+
+
+```{r, fig.width= 10, fig.height= 8}
+VizDimLoadings(CSC, dims = 1:2, reduction = "pca") 
+```
+
+
+Graph output of a PCA dimension reduction on 2D scatter plot. X and Y axes represent the top two PCs. Each point is a cell, and it's position decided based on the variance of expression of genes within the PCs. Cells are colored either as endo-pericyte_1 or endo-pericyte_2.
+```{r}
+DimPlot(CSC, reduction = "pca")
+```
+
+
+Draws a heatmap focusing on PC1. Both cells and genes are sorted by their principal component scores. Shows gene heterogeneity of PC1 in the top 500 cells.
+```{r}
+DimHeatmap(CSC, dims = 1, cells= 500, balanced = TRUE)
+```
+
+
+Visualize the heatmap of first 20 principal components.
+```{r, fig.width=10, fig.height=25, fig.fullwidth= TRUE}
+DimHeatmap(CSC, dims = 1:20, cells= 500, balanced = TRUE)
+```
+
+
+Plots the standard deviations of the PCs for easy identification of their significance.
+
+* 20 PCs will be used for downstream analyses.
+```{r}
+ElbowPlot(CSC, ndims = 50)
+```
+
+
+```{r, include=FALSE}
+cluster <- "Clustering Analysis"
+```
+Cluster of Endo-pericyte_1 & 2 CSC populations
+
+* Cluster to distinguish endothelial cell and pericyte populations
+* Cluster resolution attempted at 0.05, 0.1, and 0.2
+
+t-SNE and UMAP gives more freedom to how it arranges cells in low dimensional space. Allowing the separation of many clusters in a complex population than PCA. Each cell is connected to it's nearest neighboring cells (KNN). Louvain algorithm then deconvolutes connections to identify clusters.
+
+
+```{r, message=FALSE, warning= FALSE}
+CSC <- FindNeighbors(CSC, dims = 1:20) #KNN
+CSC <- FindClusters(CSC, resolution = 0.05) #Louvain algorithm
+Idents(CSC) <- "RNA_snn_res.0.05"
+```
+
+
+```{r, fig.width= 8, fig.height= 15, message=FALSE, warning = FALSE}
+##Plot UMAP and t-SNE
+CSC <- RunUMAP(CSC, dims = 1:20)
+CSC <- RunTSNE(CSC, dims = 1:20)
+
+plot1_0.05 <- DimPlot(CSC, reduction = "umap", label = T) #Generates more compact clusters with more empty spaces between them. Faster than t-SNE
+plot2_0.05 <-DimPlot(CSC, reduction = "tsne", label = T) #Computationally intensive than other visualizations
+plot3_0.05 <-DimPlot(CSC, reduction = "pca", label = F, pt.size = 2)
+multiplot(plot1_0.05, plot2_0.05, plot3_0.05)
+```
+
+
+```{r, message=FALSE, warning= FALSE}
+CSC <- FindClusters(CSC, resolution = 0.1) #Louvain algorithm
+Idents(CSC) <- "RNA_snn_res.0.1"
+```
+
+
+```{r, fig.width= 8, fig.height= 15, message=FALSE, warning = FALSE}
+##Plot UMAP and t-SNE
+CSC <- RunUMAP(CSC, dims = 1:20)
+CSC <- RunTSNE(CSC, dims = 1:20)
+
+plot1_0.1 <- DimPlot(CSC, reduction = "umap", label = T)
+plot2_0.1 <- DimPlot(CSC, reduction = "tsne", label = T)
+plot3_0.1 <- DimPlot(CSC, reduction = "pca", label = F, pt.size = 2)
+multiplot(plot1_0.1, plot2_0.1, plot3_0.1)
+```
+
+
+```{r, message=FALSE, warning = FALSE}
+CSC <- FindClusters(CSC, resolution = 0.5) #Louvain algorithm
+Idents(CSC) <- "RNA_snn_res.0.5"
+```
+
+
+```{r, fig.width= 8, fig.height= 15, message=FALSE, warning = FALSE}
+##Plot UMAP and t-SNE
+CSC <- RunUMAP(CSC, dims = 1:20)
+CSC <- RunTSNE(CSC, dims = 1:20)
+
+plot1_0.5 <- DimPlot(CSC, reduction = "umap", label = T)
+plot2_0.5 <- DimPlot(CSC, reduction = "tsne", label = T)
+plot3_0.5 <- DimPlot(CSC, reduction = "pca", label = F, pt.size = 2)
+multiplot(plot1_0.5, plot2_0.5, plot3_0.5)
+```
+
+
+Set identity to resolution 0.1
+```{r}
+Idents(CSC) <- "RNA_snn_res.0.1"
+```
+
+
+
+```{r, include=FALSE}
+cluster_annotation <- "Cluster annotation"
+```
+## `r cluster_annotation`
+How many cells contribute to each cluster.
+
+
+```{r, echo = TRUE}
+CellsPerCluster <- as.data.frame(tapply(
+    CSC@meta.data$Barcode, CSC@meta.data$RNA_snn_res.0.1, function(x) length(x) ))
+
+
+names(CellsPerCluster) <- "NumberOfCells"
+CellsPerCluster$Cluster <- rownames(CellsPerCluster)
+CellsPerCluster
+```
+
+
+Find markers that define clusters via differential expression. Compares cells of a cluster to all cells.
+```{r, message = FALSE}
+clusters.marker <- FindAllMarkers(CSC, min.pct = 0.25, test.use = "MAST")
+```
+
+
+Upregulated genes in clusters 0, 1, 2, 3, 4. (output not shown)
+```{r, message= FALSE}
+clusters.marker %>% group_by(cluster) %>% top_n(n = 50, wt= avg_log2FC)
+```
+
+
+The following markers were used to distinguish cell types:
+
+* endothelial cells: VWF, FLT1, CLDN5, ABCB1, THSD4, PECAM1, MECOM
+* pericytes: PDGFRB, NOTCH3, PRKG1, CSPG4 (NG2), GPC5, DLC1, RGS5, PDE7B
+
+```{r, include=FALSE}
+feature_plt_1 <- "Feature Plots (EC genes)"
+```
+## `r feature_plt_1`
+
+
+```{r feature_plt_1, fig.width=15, fig.height=13}
+
+#EC  Biomarkers
+FeaturePlot(CSC, features = c("CLDN5",   #Well-established EC marker
+                              "PECAM1",  #Expressed highly in spinal cord
+                              "VWF",     #Expressed highly in spinal cord
+                              "ABCB1",   #Well-established EC marker
+                              "ST6GALNAC3",
+                              "THSD4"
+                              ))
+```
+
+
+```{r, fig.width= 7, fig.height=10}
+VlnPlot(CSC, features = c("VWF", "FLT1", "CLDN5", "ABCB1", "ST6GALNAC3", "THSD4", "PECAM1"))
+```
+
+
+```{r, include=FALSE}
+feature_plt_2 <- "Feature Plots (Pericyte genes)"
+```
+## `r feature_plt_2`
+
+
+```{r feature_plt_2, fig.width=15, fig.height=12}
+
+#Pericyte Biomarkers
+FeaturePlot(CSC, features = c("PDGFRB",  #Well estabished pericyte marker known to be present in SC
+                              "CSPG4",   #Well established pericyte marker known to be present in SC
+                              "NOTCH3",
+                              "PRKG1",
+                              "GPC5",
+                              "RGS5",
+                              "PDE7B"
+                              ))
+```
+
+
+```{r, fig.width= 7, fig.height=10}
+VlnPlot(CSC, features = c("PDGFRB", "NOTCH3", "PRKG1", "CSPG4",  "GPC5", "RGS5", "PDE7B"))
+```
+
+
+```{r, include=FALSE}
+feature_plt_3 <- "Feature Plots (Cluster 2)"
+```
+
+
+```{r feature_plt_3, fig.width=15, fig.height=12}
+
+
+FeaturePlot(CSC, features = c("PTPRC",
+                              "THEMIS",
+                              "ARHGAP15",
+                              "ANK3",
+                              "PPP2R2B",
+                              "PDE4B",
+                              "SLC24A2"
+                              ))
+```
+
+
+```{r, include=FALSE}
+feature_plt_4 <- "Feature Plots (Cluster 3)"
+```
+
+
+```{r feature_plt_4, fig.width=15, fig.height=12}
+
+
+FeaturePlot(CSC, features = c("SERPINE1",
+                              "ADGRG6",
+                              "BACE2",
+                              "IL1R1",
+                              "FOXO1",
+                              "CNKSR3",
+                              "ZFAND5"
+                              ))
+```
+
+
+```{r, include=FALSE}
+feature_plt_5 <- "Feature Plots (Cluster 4)"
+```
+
+
+```{r feature_plt_5, fig.width=15, fig.height=12}
+
+
+FeaturePlot(CSC, features = c("DUSP5",
+                              "NKAIN2",
+                              "CXCL8",
+                              "PTGS2",
+                              "ZFP36",
+                              "PELI1",
+                              "ATP13A3"
+                              ))
+```
+
+
+* Cluster 0, 3, 4= endothelial cells?
+* Cluster 1, 2 = pericytes?
+
+```{r, include=FALSE}
+annot <- "Annotate cells in CSC endo-pericyte populations"
+```
+
+
+```{r}
+CSC$annotate <- CSC$RNA_snn_res.0.1
+
+Idents(CSC) <- "annotate"
+
+CSC <- RenameIdents(CSC, "0" = "Endothelial", "1" = "Pericyte", "3" = "Endothelial", "4" = "Endothelial", "2" = "Pericyte")
+
+CSC$annotate <- Idents(CSC)
+```
+
+
+Generate t-SNE with cell annotation
+```{r, fig.width=7, fig.height=6, fig.fullwidth=TRUE}
+DimPlot(CSC, label = T, repel = T, group.by = "annotate")
+```
+
+
+```{r, message= FALSE}
+saveRDS(CSC, "/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/CSC_annotated.RDS")
+```
+
+
+```{r, message= FALSE}
+CSC_EC <- subset(CSC, subset=annotate=="Endothelial")
+
+saveRDS(CSC_EC, "/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/CSC_EC_annotated.RDS")
+```

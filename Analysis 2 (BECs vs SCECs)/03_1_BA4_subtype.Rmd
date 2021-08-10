@@ -1,0 +1,380 @@
+---
+title: "Identify EC subtypes in BA4"
+author: "Bono"
+date: "27/05/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This is the scRNA-seq analysis workflow for comparing human brain endothelial cells vs human spinal cord endothelial cells. This allows for better understanding of how neurovascular functions are contributed by selected populations of EC populations. Required packages involve Seurat and Bioconductor. 
+
+* This script looks to further characterize motor cortex (BA4) endothelial cells into
+their subtypes:
+
+* Arterial
+* Venous
+* Capillary
+
+
+```{r, include=FALSE}
+load_lib <- "Load Libraries"
+```
+## `r load_lib`
+* Load all the necessary libraries
+
+
+```{r load_lib, message=FALSE}
+library(Seurat) 
+library(dplyr)
+library(scater)
+library(SingleCellExperiment)
+library(here)
+library(ggplot2)
+library(scran)
+library(fgsea)
+library(msigdbr)
+library(clusterProfiler)
+library(GSEABase)
+library(org.Hs.eg.db)
+library(SCINA)
+library(scSorter)
+```
+
+
+```{r, include=FALSE}
+load_data <- "Load BA4 Pure EC population"
+```
+# `r load_data`
+
+* Load the BA4 population containing only endothelial cells
+
+```{r}
+BA4_EC <- readRDS(here("data/BA4_EC_annotated.RDS"))
+```             
+
+
+```{r, include=FALSE}
+EC_sub <- "Characterize BA4 ECs into their subtypes"
+```
+# `r EC_sub`
+
+This part of the analysis looks to further characterize motor cortex (BA4) endothelial cells in to
+their subtypes:
+
+* Arterial
+* Venous
+* Capillary
+
+
+#Identify (n = 2000) and plot (n = 10) top HVGs
+```{r, fig.width = 15, fig.height= 8, message= FALSE, warning=FALSE}
+BA4_EC <- FindVariableFeatures(BA4_EC, selection.method = "vst", nfeatures= 2000)
+
+topEC_vg <- head(VariableFeatures(BA4_EC), 10)
+
+EC_var_genes <- VariableFeaturePlot(BA4_EC)
+
+labels_EC <- LabelPoints(plot = EC_var_genes, points = topEC_vg, repel = TRUE)
+
+EC_var_genes + labels_EC
+```
+
+
+#Run PCA
+```{r, message=FALSE}
+all.genes <- rownames(BA4_EC)
+
+BA4_EC <- ScaleData(BA4_EC, features = all.genes) #scale all variable genes
+
+BA4_EC <- RunPCA(BA4_EC, features = VariableFeatures(object=BA4_EC))
+
+ElbowPlot(BA4_EC, ndims = 50)
+```
+
+
+#Visualize
+```{r, fig.width= 10, fig.height= 8}
+VizDimLoadings(BA4_EC, dims = 1:2, reduction = "pca") 
+```
+
+
+#Cluster ECs
+```{r, message=FALSE, warning= FALSE}
+BA4_EC <- FindNeighbors(BA4_EC, dims = 1:30) #KNN
+
+BA4_EC <- FindClusters(BA4_EC, resolution = 0.3) #Louvain algorithm
+
+Idents(BA4_EC) <- "RNA_snn_res.0.3"
+```
+
+
+#Visualize sub EC populations
+```{r, message= FALSE, warning=FALSE}
+BA4_EC <- RunUMAP(BA4_EC, dims = 1:30)
+BA4_EC <- RunTSNE(BA4_EC, dims = 1:30)
+DimPlot(BA4_EC, reduction = "umap", label=T, repel=T)
+DimPlot(BA4_EC, reduction = "tsne")
+```
+
+
+#ECs in each subcluster
+```{r, echo = TRUE}
+CellsPerCluster <- as.data.frame(tapply(
+    BA4_EC@meta.data$Barcode, BA4_EC@meta.data$RNA_snn_res.0.3, function(x) length(x) ))
+
+names(CellsPerCluster) <- "NumberOfCells"
+
+CellsPerCluster$RNA_snn_res.0.3 <- rownames(CellsPerCluster)
+
+CellsPerCluster$Cluster <- rownames(CellsPerCluster)
+
+CellsPerCluster
+```
+
+
+```{r}
+subclusters_EC.marker <- FindAllMarkers(BA4_EC, min.pct = 0.25, logfc.threshold = 0.25, test.use = "MAST")
+
+subclusters_EC.marker %>% group_by(cluster) %>% top_n(n = 100, wt= avg_log2FC)
+```
+
+
+```{r, include=FALSE}
+feature_plt_1 <- "Feature Plots (Artery genes)"
+```
+# `r feature_plt_1`
+
+
+```{r feature_plt_1, fig.width=15, fig.height=12}
+FeaturePlot(BA4_EC, features = c("BMX",     #According to Vanlandewijck paper (Mouse)
+                                 "SEMA3G", #According to Vanlandewijck paper (Mouse)
+                                 "VEGFC",  #According to Vanlandewijck paper (Mouse)
+                                 "EFNB2",  #Preferentially on arterial endothelium (Human & mouse)
+                                 "NOTCH1", #Arterial specificaiton and angiogenic potential (Mouse)
+                                 "NOTCH4", 
+                                 "DLL4",   #Canonical NOTCH ligand strongly expressed in arterial ECs
+                                 "HEY2",    #Expressed in humans
+                                 "MGP"
+                                 ))
+```
+
+
+```{r, include=FALSE}
+feature_plt_2 <- "Feature Plots (Vein genes)"
+```
+# `r feature_plt_2`
+
+
+```{r feature_plt_2, fig.width=15, fig.height=12}
+FeaturePlot(BA4_EC, features = c("NR2F2",   #Expressed in vein ECs (Mouse)
+                                 "VCAM1",   #According to Vanlandewijck paper (Mouse)
+                                 "VWF",     #According to Vanlandewijck paper (Mouse)
+                                 "SLC38A5", #According to Vanlandewijck paper (Mouse)
+                                 "EPHB4", #Preferentially expressed in vein ECs (Human & mouse),
+                                 "EMCN",  #Expressed in humans
+                                 "IL1R1",  #Expressed in Humans
+                                 "ICAM1"
+                                 ))
+```
+
+
+```{r, include=FALSE}
+feature_plt_3 <- "Feature Plots (Capillary genes)"
+```
+# `r feature_plt_3`
+
+
+```{r feature_plt_3, fig.width=15, fig.height=12}
+
+FeaturePlot(BA4_EC, features = c("SLC16A1",  #According to Vanlandewijck paper (Mouse)
+                                 "MFSD2A",   #According to Vanlandewijck paper (Mouse)
+                                 "SLC7A5",   #According to Vanlandewijck paper (Mouse)
+                                 "TFRC",     #According to Vanlandewijck paper (Mouse)
+                                 "ABCB1",    #P-glycoprotein (MDR) is often expressed in brain capillary ECs (ABC transporter)(Mouse)
+                                 "ABCG2",    #BCRP also demonstrated before is excessively expressed in brain capillary ECs (ABC transporter)(Human & Mouse)
+                                 "SLC7A5",   #LAT-1 expressed in BBB models, responsible for transport of large neutral AAs, L-dopa and gabapentin by brain capillary ECs (Human & Mouse)
+                                 "SLC2A1"   #GLUT-1 expressed in BBB models, responsible for drug transporter in the brain capillary (Human & Mouse)
+                                 ))
+```
+
+
+```{r, include=FALSE}
+feature_plt_4 <- "Feature Plots (DE genes)"
+```
+# `r feature_plt_4`
+
+
+```{r, fig.width=15, fig.height=12}
+FeaturePlot(BA4_EC, features = c("ADAMTS9",
+                                 "CXCL8",
+                                 "SELE",
+                                 "SLC4A7",
+                                 "COL4A1",
+                                 "COL4A2",
+                                 "MT2A",
+                                 "HSPA5",
+                                 "ELL2",
+                                 "TIMP1"
+                                 ))
+```
+
+
+```{r}
+DimPlot(BA4_EC, group.by = "Age")
+
+DimPlot(BA4_EC, group.by = "BBN")
+
+DimPlot(BA4_EC, group.by = "CauseOfDeath_category")
+```
+
+
+```{r, include=FALSE}
+feature_plt_5 <- "Feature Plots (Based on cell quality)"
+```
+#`r feature_plt_5`
+
+
+Clusters 0 and 1 might be clustered based on quality
+```{r}
+FeaturePlot(BA4_EC, features = c("nFeature_RNA", "nCount_RNA", "percent.mito"))
+```
+
+
+#Add Subtype Annotations
+```{r, include=FALSE}
+Annot <- "EC Subtype Annotations"
+```
+# `r Annot`
+
+Here, we will use SCINA to manually annotate cells to either: 
+
+*Capillary
+*Arteries
+*Vein
+
+
+#Perform SCINA
+```{r}
+Capillary <- c("MFSD2A", "SLC16A1", "SLC7A5", "TFRC", "ABCB1")
+
+Arterial <- c("SEMA3G", "EFNB2", "VEGFC", "HEY2", "BMX")
+
+Vein <- c("EPHB4", "IL1R1", "VCAM1", "EMCN", "NR2F2")
+
+Markers <- cbind(Capillary, Arterial, Vein)
+
+Mark <- as.data.frame(Markers)
+```
+
+
+#Carry out subtype annotation
+```{r}
+annot_EC <- SCINA(GetAssayData(BA4_EC, slot = "data"), signature = Mark, allow_unknown = FALSE, rm_overlap = FALSE)
+```
+
+
+```{r}
+Idents(BA4_EC) <- annot_EC$cell_labels
+
+BA4_EC$subtype <- annot_EC$cell_labels
+
+BA4_EC <- AddMetaData(BA4_EC, metadata = annot_EC$cell_labels, col.name = "subtype")
+
+DimPlot(BA4_EC, reduction = "umap", group.by = "subtype")
+```
+
+
+Perform scSorter (Cell assign approach 2)
+```{r Annot, message= FALSE}
+Type <- c("Capillary", "Capillary", "Capillary", "Capillary", "Capillary", "Arterial", "Arterial", "Arterial", "Arterial", "Arterial", "Vein", "Vein", "Vein", "Vein", "Vein")
+
+Marker <- c("MFSD2A", "SLC16A1", "SLC7A5", "TFRC", "ABCB1","MGP", "VEGFC", "HEY2","BMX", "EFNB2", "ICAM1", "IL1R1","EPHB4", "NR2F2", "VCAM1")
+
+Weight <- c(2, 2, 2, 2, 2, 5, 5, 5, 5, 5, 5, 5, 5, 2, 5)
+
+Markerr <- cbind(Type, Marker, Weight)
+
+Markerss <- as.data.frame(Markerr)
+```
+
+
+```{r}
+Annot_EC_2 <- scSorter(BA4_EC@assays$RNA@data, Markerss, alpha = 0)
+```
+
+
+```{r}
+Idents(BA4_EC) <- Annot_EC_2$Pred_Type
+
+BA4_EC$subtype <- Annot_EC_2$Pred_Type
+
+BA4_EC <- AddMetaData(BA4_EC, metadata = Annot_EC_2$Pred_Type, col.name = "subtype")
+
+BA4_EC <- subset(BA4_EC, subset = (subtype == "Arterial" | subtype == "Capillary" | subtype == "Vein"))
+
+BA4_EC$subtype <- Idents(BA4_EC)
+
+DimPlot(BA4_EC, reduction = "umap", group.by = "subtype", cols = c("chartreuse4", "coral2", "cornflowerblue")) + ggtitle("BA4 (Motor cortex) endothelial subtype")
+```
+
+
+```{r}
+art <- BA4_EC[,BA4_EC@meta.data$subtype == "Arterial"]
+
+capi <- BA4_EC[,BA4_EC@meta.data$subtype == "Capillary"]
+
+veins <- BA4_EC[,BA4_EC@meta.data$subtype == "Vein"]
+
+tgt <- merge(art, c(capi, veins), add.cell.ids = c("Arterial", "Capillary", "Vein"))
+```
+
+
+```{r, echo = TRUE}
+CellsPerSubtype <- as.data.frame(tapply(
+    BA4_EC@meta.data$Barcode, BA4_EC@meta.data$subtype, function(x) length(x) ))
+
+names(CellsPerSubtype) <- "NumberOfCells"
+
+CellsPerSubtype$Subtype <- rownames(CellsPerSubtype)
+
+CellsPerSubtype$Subtype <- rownames(CellsPerSubtype)
+
+CellsPerSubtype
+```
+
+
+```{r}
+col_art <- rep("coral2",ncol(tgt[,tgt@meta.data$subtype=="Arterial"]))
+
+col_capi <- rep("chartreuse4",ncol(tgt[,tgt@meta.data$subtype=="Capillary"]))
+
+col_vein <- rep("cornflowerblue",ncol(tgt[,tgt@meta.data$subtype=="Vein"]))
+
+palette <- c(col_art, col_capi, col_vein)
+
+tgt$color <- palette
+```
+
+
+```{r, fig.width= 8, fig.height= 10}
+par(mfrow = c(3, 1))
+barplot(tgt@assays$RNA@data["HEY2",], main = "HEY2", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["VEGFC",], main = "VEGFC", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+#barplot(tgt@assays$RNA@data["SEMA3G",], main = "SEMA3G", axisnames = FALSE, ylab = "count", border = tgt$color, cex.axis = 2, cex.main = 2, cex.lab = 2)
+barplot(tgt@assays$RNA@data["MGP",], main = "MGP", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["MFSD2A",], main = "MFSD2A", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["SLC16A1",], main = "SLC16A1", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["TFRC",], main = "TFRC", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["VCAM1",], main = "VCAM1", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["IL1R1",], main = "IL1R1", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["NR2F2",], main = "NR2F2", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+```
+
+
+```{r}
+saveRDS(BA4_EC, "/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/BA4_SubAnnot.RDS")
+```
+

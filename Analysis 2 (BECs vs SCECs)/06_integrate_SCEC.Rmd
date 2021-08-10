@@ -1,0 +1,142 @@
+z---
+title: "Merge SCEC population"
+author: "Bono"
+date: "16/06/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This script is written to integrate the mouse external SCEC dataset with Seeker BA4 & CB & CSC endothelial population. The integrated product of this step will be used for clustering, DE testing, as well as identifying differences between brain and spinal cord ECs.
+
+* External mouse SCEC dataset is a young adult of 8-10 weeks old
+* GSE162610
+* QC-ed through Scater
+* Normalized through Scran
+* EC subtype annotated either Arterial, Capillary, or Vein
+
+
+```{r, include=FALSE}
+load_lib <- "Load Libraries"
+```
+## `r load_lib`
+* Load all the necessary libraries
+
+```{r load_lib, message=FALSE}
+library(Seurat) 
+library(dplyr)
+library(scater)
+library(SingleCellExperiment)
+library(here)
+library(ggplot2)
+library(scran)
+library(scuttle)
+library(Matrix)
+library(biomaRt)
+library(reshape2)
+```
+
+
+#Import the integrated and downsampled GSE162610 dataset
+#The two mouse samples had been previously QCed and normalised
+#Can integrate with Seeker data directly
+```{r}
+SCEC_mouse <- readRDS(here("data/mouse_downsampled.RDS"))
+```
+
+
+#Pre-processing of Seeker data prior CCA integration 
+```{r, message= FALSE}
+merged_EC <- readRDS(here("data/merged_EC.RDS"))
+
+merged_EC <- FindVariableFeatures(merged_EC, selection.method = "vst", nfeatures = 2000) #Find Top 2000 HVGs
+```
+
+
+#Find anchors using Seeker and mouse SCEC data
+```{r}
+features <- SelectIntegrationFeatures(object.list = list(merged_EC, SCEC_mouse))
+
+#merged_EC <- ScaleData(merged_EC, features = features, verbose = FALSE)
+#merged_EC <- RunPCA(merged_EC, features = features, verbose = FALSE)
+
+#SCEC_mouse <- ScaleData(SCEC_mouse, features = features, verbose = FALSE)
+#SCEC_mouse <- RunPCA(SCEC_mouse, features = features, verbose = FALSE)
+
+ec_anchors <- FindIntegrationAnchors(object.list = list(merged_EC, SCEC_mouse), anchor.features = features, normalization.method = "LogNormalize", reduction = "cca", k.filter = 200, k.anchor = 5)
+```
+
+
+#Perform CCA integration
+#Change default assay of integrated object to "integrate"
+```{r}
+ECs_comb <- IntegrateData(anchorset = ec_anchors, k.weight = 100)
+
+DefaultAssay(ECs_comb) <- "integrated"
+```
+
+
+
+#Perform an integrated analysis
+#Perform PCA of integrated objet
+```{r}
+all_genes <- rownames(ECs_comb)
+        
+ECs_comb <- ScaleData(ECs_comb, features = all_genes)
+
+ECs_comb <- RunPCA(ECs_comb, npcs = 40, verbose = FALSE)
+```
+
+
+#Perform clustering of integrated object
+```{r}
+ECs_comb <- RunUMAP(ECs_comb, reduction = "pca", dims = 1:20)
+ECs_comb <- FindNeighbors(ECs_comb, reduction = "pca", dims = 1:20)
+ECs_comb <- FindClusters(ECs_comb, resolution = 0.45)
+```
+
+
+#Visualize clustering of integrated object
+#Cluster 2 = Mainly arterial cells 
+#Cluster 5 = Mainly vein-like SCECs
+```{r}
+plot_sample <- DimPlot(ECs_comb, reduction = "umap", group.by = "sample")
+plot_sample + ggtitle("Sample")
+
+DimPlot(ECs_comb, reduction = "umap", group.by = "Tissues") + ggtitle("BEC + SCEC") + theme(plot.title = element_text(hjust = 0.5))
+
+plot_clust <- DimPlot(ECs_comb, reduction = "umap", label = TRUE)
+plot_clust + ggtitle("Sub-clustering") + theme(plot.title = element_text(hjust=0.5))
+
+plot_subtype <- DimPlot(ECs_comb, reduction = "umap", group.by = "subtype")
+plot_subtype + ggtitle("Endothelial Subtype")
+
+plot_ind <- DimPlot(ECs_comb, reduction = "umap", group.by = "BBN")
+plot_ind + ggtitle("Individual")
+```
+
+
+#Number of cells per cluster
+```{r, echo = TRUE}
+CellsPerCluster <- as.data.frame(tapply(
+    ECs_comb@meta.data$orig.ident, ECs_comb@meta.data$integrated_snn_res.0.45, function(x) length(x) ))
+
+names(CellsPerCluster) <- "NumberOfCells"
+
+CellsPerCluster$RNA_snn_res.0.5 <- rownames(CellsPerCluster)
+
+CellsPerCluster$RNA_snn_res.0.5 <- rownames(CellsPerCluster)
+
+CellsPerCluster
+```
+
+
+#Set default assay back to RNA
+#Save integrated object
+```{r}
+DefaultAssay(ECs_comb) <- "RNA"
+
+saveRDS(ECs_comb, file = "/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/int_ECs.RDS")
+```

@@ -1,0 +1,563 @@
+---
+title: "Mouse SCEC subtypes"
+author: "Bono"
+date: "17/06/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This is the script for finding out the subtype of endothelial cells in mouse spinal cord. The mouse SCEC dataset will be intergrated into our analysis to increase cell depth. SCEC subtypes include:
+
+* Arterial
+* Venous
+* Capillary
+
+
+```{r, include=FALSE}
+load_lib <- "Load Libraries"
+```
+## `r load_lib`
+* Load all the necessary libraries
+
+
+```{r load_lib, message=FALSE}
+library(Seurat) 
+library(dplyr)
+library(here)
+library(ggplot2)
+library(msigdbr)
+library(clusterProfiler)
+library(GSEABase)
+library(org.Hs.eg.db)
+library(SCINA)
+library(tidyr)
+library(scSorter)
+```
+
+
+```{r, include=FALSE}
+load_data <- "Load mouse SCEC population"
+```
+# `r load_data`
+
+* Load the CSC population containing only endothelial cells in mouse
+
+```{r}
+SCEC_mouse <- readRDS(here("data/SCEC_mouse.RDS"))
+```
+
+
+#Identify (n = 2000) and plot (n = 10) top HVGs
+```{r, fig.width = 15, fig.height= 8, message= FALSE, warning=FALSE}
+SCEC_mouse <- FindVariableFeatures(SCEC_mouse, selection.method = "vst", nfeatures= 2000)
+
+topEC_vg <- head(VariableFeatures(SCEC_mouse), 10)
+
+EC_var_genes <- VariableFeaturePlot(SCEC_mouse)
+
+labels_EC <- LabelPoints(plot = EC_var_genes, points = topEC_vg, repel = TRUE)
+
+EC_var_genes + labels_EC
+```
+
+
+#Run PCA
+```{r, message =FALSE}
+all.genes <- rownames(SCEC_mouse)
+
+SCEC_mouse <- ScaleData(SCEC_mouse, features = all.genes) #save all variable genes
+
+SCEC_mouse <- RunPCA(SCEC_mouse, features = VariableFeatures(object=SCEC_mouse))
+
+ElbowPlot(SCEC_mouse, ndims = 50)
+```
+
+
+#Cluster ECs
+```{r, message=FALSE, warning= FALSE}
+SCEC_mouse <- FindNeighbors(SCEC_mouse, dims = 1:35) #KNN
+
+SCEC_mouse <- FindClusters(SCEC_mouse, resolution = 0.5) #Louvain algorithm
+
+Idents(SCEC_mouse) <- "RNA_snn_res.0.5"
+```
+
+
+#Visualize sub EC populations
+```{r, message = FALSE}
+SCEC_mouse <- RunUMAP(SCEC_mouse, dims = 1:35)
+
+DimPlot(SCEC_mouse, label=T, repel=T, group.by = "RNA_snn_res.0.5" )
+```
+
+
+#Find markers for each population
+```{r, message= FALSE}
+subclusters_EC.marker <- FindAllMarkers(SCEC_mouse, min.pct = 0.25, logfc.threshold = 0.25, test.use = "MAST")
+
+subclusters_EC.marker %>% group_by(cluster) %>% top_n(n = 50, wt= avg_log2FC)
+```
+
+
+```{r, include=FALSE}
+feature_plt_1 <- "Feature Plots (Artery genes)"
+```
+# `r feature_plt_1`
+
+
+```{r feature_plt_1, fig.width=15, fig.height=12}
+FeaturePlot(SCEC_mouse, features = c("BMX",    #According to Vanlandewijck paper (Mouse)
+                                 "EFNB2",  #Preferentially on arterial endothelium (Human & mouse)
+                                 "SEMA3G", #According to Vanlandewijck paper (Mouse)
+                                 "VEGFC",  #According to Vanlandewijck paper (Mouse)
+                                 "NOTCH1", #Arterial specificaiton and angiogenic potential (Mouse)
+                                 "DLL4",   #Canonical NOTCH ligand strongly expressed in arterial ECs
+                                 "HEY2",    #Expressed in humans
+                                 "MGP"
+                                 ))
+```
+
+
+```{r, include=FALSE}
+feature_plt_2 <- "Feature Plots (Vein genes)"
+```
+# `r feature_plt_2`
+
+
+
+```{r feature_plt_2, fig.width=15, fig.height=12}
+FeaturePlot(SCEC_mouse, features = c("NR2F2", #Expressed only in vein ECs (Mouse)
+                                 "VWF",   #According to Vanlandewijck paper (Mouse)
+                                 "VCAM1",  #According to Vanlandewijck paper (Mouse)
+                                 "SLC38A5", #According to Vanlandewijck paper (Mouse)
+                                 "EPHB4", #Preferentially expressed in vein ECs (Human & mouse)
+                                 "EMCN",  #Expressed in human
+                                 "IL1R1"  #Expressed in human
+                                 ))
+```
+
+
+```{r, include=FALSE}
+feature_plt_3 <- "Feature Plots (Capillary genes)"
+```
+# `r feature_plt_3`
+
+
+```{r feature_plt_3, fig.width=15, fig.height=12}
+
+FeaturePlot(SCEC_mouse, features = c("SLC16A1",  #According to Vanlandewijck paper (Mouse)
+                                 "MFSD2A",   #According to Vanlandewijck paper (Mouse)
+                                 "SLC7A5",    #According to Vanlandewijck paper (Mouse)
+                                 "TFRC",    #According to Vanlandewijck paper (Mouse)
+                                 "ABCB1",    #P-glycoprotein (MDR) is often expressed in brain capillary ECs (ABC transporter)(Mouse)
+                                 "ABCG2",    #BCRP also demonstrated before is excessively expressed in brain capillary ECs (ABC transporter)(Human & Mouse)
+                                 "SLC7A5",   #LAT-1 expressed in BBB models, responsible for transport of large neutral AAs, L-dopa and gabapentin by brain capillary ECs (Human & Mouse)
+                                 "SLC2A1"   #GLUT-1 expressed in BBB models, responsible for drug transporter in the brain capillary (Human & Mouse)
+                                 ))
+```
+
+
+#Perform scSorter (Cell assign approach)
+```{r Annot, message= FALSE}
+Type <- c("Capillary", "Capillary", "Capillary", "Capillary", "Arterial", "Arterial", "Arterial", "Arterial","Vein", "Vein", "Vein", "Vein")
+
+Marker <- c("MFSD2A", "SLC16A1", "SLC7A5", "TFRC","MGP", "VEGFC", "SEMA3G","BMX",  "VWF", "NR2F2", "VCAM1", "EPHB4")
+
+Weight <- c(3, 2, 2, 2, 5, 5, 5, 5, 5, 5, 5, 5)
+
+Markerr <- cbind(Type, Marker, Weight)
+
+Markerss <- as.data.frame(Markerr)
+```
+
+
+#Run scSorter
+```{r}
+Annot_EC_3 <- scSorter(SCEC_mouse@assays$RNA@data, Markerss, alpha = 0)
+```
+
+
+```{r}
+Idents(SCEC_mouse) <- Annot_EC_3$Pred_Type
+
+SCEC_mouse$subtype <- Annot_EC_3$Pred_Type
+
+SCEC_mouse <- AddMetaData(SCEC_mouse, metadata = Annot_EC_3$Pred_Type, col.name = "subtype")
+
+SCEC_mouse <- subset(SCEC_mouse, subset = (subtype == "Arterial" | subtype == "Capillary" | subtype == "Vein"))
+
+DimPlot(SCEC_mouse, reduction = "umap", group.by = "subtype", cols = c( "coral2", "chartreuse4", "cornflowerblue"), pt.size = 1.5)
+```
+
+
+#SCECs annotated to each subtype
+```{r, echo = TRUE}
+CellsPerSubtype <- as.data.frame(tapply(
+    SCEC_mouse@meta.data$sample_id, SCEC_mouse@meta.data$subtype, function(x) length(x) ))
+
+names(CellsPerSubtype) <- "NumberOfCells"
+
+CellsPerSubtype$Subtype <- rownames(CellsPerSubtype)
+
+CellsPerSubtype$Subtype <- rownames(CellsPerSubtype)
+
+CellsPerSubtype
+```
+
+
+```{r}
+art <- SCEC_mouse[,SCEC_mouse@meta.data$subtype == "Arterial"]
+
+capi <- SCEC_mouse[,SCEC_mouse@meta.data$subtype == "Capillary"]
+
+veins <- SCEC_mouse[,SCEC_mouse@meta.data$subtype == "Vein"]
+
+tgt <- merge(art, c(capi, veins), add.cell.ids = c("Arterial", "Capillary", "Vein"))
+```
+
+
+```{r}
+col_art <- rep("coral2",ncol(tgt[,tgt@meta.data$subtype=="Arterial"]))
+
+col_capi <- rep("chartreuse4",ncol(tgt[,tgt@meta.data$subtype=="Capillary"]))
+
+col_vein <- rep("cornflowerblue",ncol(tgt[,tgt@meta.data$subtype=="Vein"]))
+
+palette <- c(col_art, col_capi, col_vein)
+
+tgt$color <- palette
+```
+
+
+```{r, fig.width= 8, fig.height= 10}
+par(mfrow = c(3, 1))
+barplot(tgt@assays$RNA@data["VEGFC",], main = "VEGFC", axisnames = FALSE, border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+barplot(tgt@assays$RNA@data["BMX",], main = "BMX", axisnames = FALSE, border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+barplot(tgt@assays$RNA@data["SEMA3G",], main = "SEMA3G", axisnames = FALSE, border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+barplot(tgt@assays$RNA@data["MFSD2A",], main = "MFSD2A", axisnames = FALSE, border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+barplot(tgt@assays$RNA@data["SLC16A1",], main = "SLC16A1", axisnames = FALSE, border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+barplot(tgt@assays$RNA@data["TFRC",], main = "TFRC", axisnames = FALSE, border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+barplot(tgt@assays$RNA@data["IL1R1",], main = "IL1R1", axisnames = FALSE, border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+barplot(tgt@assays$RNA@data["VWF",], main = "VWF", axisnames = FALSE, border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+barplot(tgt@assays$RNA@data["NR2F2",], main = "NR2F2", axisnames = FALSE, border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+```
+
+
+```{r}
+saveRDS(SCEC_mouse, file = "/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/SCEC_mouseSubtype.RDS"
+)
+```
+
+
+
+######################################################################################
+
+Do it for sample 2
+
+```{r}
+SCEC_mouse <- readRDS(here("data/SCEC_mouse_2.RDS"))
+```
+
+
+#Identify (n = 2000) and plot (n = 10) top HVGs
+```{r, fig.width = 15, fig.height= 8, message= FALSE, warning=FALSE}
+SCEC_mouse <- FindVariableFeatures(SCEC_mouse, selection.method = "vst", nfeatures= 2000)
+
+topEC_vg <- head(VariableFeatures(SCEC_mouse), 10)
+
+EC_var_genes <- VariableFeaturePlot(SCEC_mouse)
+
+labels_EC <- LabelPoints(plot = EC_var_genes, points = topEC_vg, repel = TRUE)
+
+EC_var_genes + labels_EC
+```
+
+
+#Run PCA
+```{r, message =FALSE}
+all.genes <- rownames(SCEC_mouse)
+
+SCEC_mouse <- ScaleData(SCEC_mouse, features = all.genes) #save all variable genes
+
+SCEC_mouse <- RunPCA(SCEC_mouse, features = VariableFeatures(object=SCEC_mouse))
+
+ElbowPlot(SCEC_mouse, ndims = 50)
+```
+
+
+#Cluster ECs
+```{r, message=FALSE, warning= FALSE}
+SCEC_mouse <- FindNeighbors(SCEC_mouse, dims = 1:35) #KNN
+
+SCEC_mouse <- FindClusters(SCEC_mouse, resolution = 0.5) #Louvain algorithm
+
+Idents(SCEC_mouse) <- "RNA_snn_res.0.5"
+```
+
+
+#Visualize sub EC populations
+```{r, message = FALSE}
+SCEC_mouse <- RunUMAP(SCEC_mouse, dims = 1:35)
+
+DimPlot(SCEC_mouse, label=T, repel=T, group.by = "RNA_snn_res.0.5" )
+```
+
+
+#Find markers for each population
+```{r, message= FALSE}
+subclusters_EC.marker <- FindAllMarkers(SCEC_mouse, min.pct = 0.25, logfc.threshold = 0.25, test.use = "MAST")
+
+subclusters_EC.marker %>% group_by(cluster) %>% top_n(n = 50, wt= avg_log2FC)
+```
+
+
+```{r, include=FALSE}
+feature_plt_1 <- "Feature Plots (Artery genes)"
+```
+# `r feature_plt_1`
+
+
+```{r feature_plt_1, fig.width=15, fig.height=12}
+FeaturePlot(SCEC_mouse, features = c("BMX",    #According to Vanlandewijck paper (Mouse)
+                                 "EFNB2",  #Preferentially on arterial endothelium (Human & mouse)
+                                 "SEMA3G", #According to Vanlandewijck paper (Mouse)
+                                 "VEGFC",  #According to Vanlandewijck paper (Mouse)
+                                 "NOTCH1", #Arterial specificaiton and angiogenic potential (Mouse)
+                                 "DLL4",   #Canonical NOTCH ligand strongly expressed in arterial ECs
+                                 "HEY2",    #Expressed in humans
+                                 "MGP"
+                                 ))
+```
+
+
+```{r, include=FALSE}
+feature_plt_2 <- "Feature Plots (Vein genes)"
+```
+# `r feature_plt_2`
+
+
+
+```{r feature_plt_2, fig.width=15, fig.height=12}
+FeaturePlot(SCEC_mouse, features = c("NR2F2", #Expressed only in vein ECs (Mouse)
+                                 "VWF",   #According to Vanlandewijck paper (Mouse)
+                                 "VCAM1",  #According to Vanlandewijck paper (Mouse)
+                                 "SLC38A5", #According to Vanlandewijck paper (Mouse)
+                                 "EPHB4", #Preferentially expressed in vein ECs (Human & mouse)
+                                 "EMCN",  #Expressed in human
+                                 "IL1R1"  #Expressed in human
+                                 ))
+```
+
+
+```{r, include=FALSE}
+feature_plt_3 <- "Feature Plots (Capillary genes)"
+```
+# `r feature_plt_3`
+
+
+```{r feature_plt_3, fig.width=15, fig.height=12}
+
+FeaturePlot(SCEC_mouse, features = c("SLC16A1",  #According to Vanlandewijck paper (Mouse)
+                                 "MFSD2A",   #According to Vanlandewijck paper (Mouse)
+                                 "SLC7A5",    #According to Vanlandewijck paper (Mouse)
+                                 "TFRC",    #According to Vanlandewijck paper (Mouse)
+                                 "ABCB1",    #P-glycoprotein (MDR) is often expressed in brain capillary ECs (ABC transporter)(Mouse)
+                                 "ABCG2",    #BCRP also demonstrated before is excessively expressed in brain capillary ECs (ABC transporter)(Human & Mouse)
+                                 "SLC7A5",   #LAT-1 expressed in BBB models, responsible for transport of large neutral AAs, L-dopa and gabapentin by brain capillary ECs (Human & Mouse)
+                                 "SLC2A1"   #GLUT-1 expressed in BBB models, responsible for drug transporter in the brain capillary (Human & Mouse)
+                                 ))
+```
+
+
+#Perform scSorter (Cell assign approach)
+```{r Annot, message= FALSE}
+Type <- c("Capillary", "Capillary", "Capillary", "Capillary", "Arterial", "Arterial", "Arterial", "Arterial","Vein", "Vein", "Vein", "Vein")
+
+Marker <- c("MFSD2A", "SLC16A1", "SLC7A5", "TFRC","MGP", "VEGFC", "SEMA3G","BMX",  "VWF", "NR2F2", "VCAM1", "EPHB4")
+
+Weight <- c(3, 2, 2, 2, 5, 5, 5, 5, 5, 5, 5, 5)
+
+Markerr <- cbind(Type, Marker, Weight)
+
+Markerss <- as.data.frame(Markerr)
+```
+
+
+#Run scSorter
+```{r}
+Annot_EC_3 <- scSorter(SCEC_mouse@assays$RNA@data, Markerss, alpha = 0)
+```
+
+
+```{r}
+Idents(SCEC_mouse) <- Annot_EC_3$Pred_Type
+
+SCEC_mouse$subtype <- Annot_EC_3$Pred_Type
+
+SCEC_mouse <- AddMetaData(SCEC_mouse, metadata = Annot_EC_3$Pred_Type, col.name = "subtype")
+
+SCEC_mouse <- subset(SCEC_mouse, subset = (subtype == "Arterial" | subtype == "Capillary" | subtype == "Vein"))
+
+DimPlot(SCEC_mouse, reduction = "umap", group.by = "subtype", cols = c( "coral2", "chartreuse4", "cornflowerblue"), pt.size = 1.5)
+```
+
+
+#SCECs annotated to each subtype
+```{r, echo = TRUE}
+CellsPerSubtype <- as.data.frame(tapply(
+    SCEC_mouse@meta.data$sample_id, SCEC_mouse@meta.data$subtype, function(x) length(x) ))
+
+names(CellsPerSubtype) <- "NumberOfCells"
+
+CellsPerSubtype$Subtype <- rownames(CellsPerSubtype)
+
+CellsPerSubtype$Subtype <- rownames(CellsPerSubtype)
+
+CellsPerSubtype
+```
+
+
+```{r}
+art <- SCEC_mouse[,SCEC_mouse@meta.data$subtype == "Arterial"]
+
+capi <- SCEC_mouse[,SCEC_mouse@meta.data$subtype == "Capillary"]
+
+veins <- SCEC_mouse[,SCEC_mouse@meta.data$subtype == "Vein"]
+
+tgt <- merge(art, c(capi, veins), add.cell.ids = c("Arterial", "Capillary", "Vein"))
+```
+
+
+```{r}
+col_art <- rep("coral2",ncol(tgt[,tgt@meta.data$subtype=="Arterial"]))
+
+col_capi <- rep("chartreuse4",ncol(tgt[,tgt@meta.data$subtype=="Capillary"]))
+
+col_vein <- rep("cornflowerblue",ncol(tgt[,tgt@meta.data$subtype=="Vein"]))
+
+palette <- c(col_art, col_capi, col_vein)
+
+tgt$color <- palette
+```
+
+
+```{r, fig.width= 8, fig.height= 10}
+par(mfrow = c(3, 1))
+barplot(tgt@assays$RNA@data["VEGFC",], main = "VEGFC", axisnames = FALSE, border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+barplot(tgt@assays$RNA@data["BMX",], main = "BMX", axisnames = FALSE, border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+barplot(tgt@assays$RNA@data["SEMA3G",], main = "SEMA3G", axisnames = FALSE, border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+barplot(tgt@assays$RNA@data["MFSD2A",], main = "MFSD2A", axisnames = FALSE, border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+barplot(tgt@assays$RNA@data["SLC16A1",], main = "SLC16A1", axisnames = FALSE, border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+barplot(tgt@assays$RNA@data["TFRC",], main = "TFRC", axisnames = FALSE, border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+barplot(tgt@assays$RNA@data["IL1R1",], main = "IL1R1", axisnames = FALSE, border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+barplot(tgt@assays$RNA@data["VWF",], main = "VWF", axisnames = FALSE, border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+barplot(tgt@assays$RNA@data["NR2F2",], main = "NR2F2", axisnames = FALSE, border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+```
+
+
+```{r}
+saveRDS(SCEC_mouse, file = "/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/SCEC_mouse2Subtype.RDS"
+)
+```
+
+
+```{r, include=FALSE}
+int_down <- "Integrate & downsampling"
+```
+## `r int_down`
+
+
+```{r}
+#Load mouse sample 1
+SCEC_mouse1 <- readRDS(here("data/SCEC_mouseSubtype.RDS"))
+SCEC_mouse1$sample <- rep("GSE162610", ncol(SCEC_mouse1))
+SCEC_mouse1$Tissues <- rep("SCEC", ncol(SCEC_mouse1))
+SCEC_mouse1$BBN <- rep("GSM4955360", ncol(SCEC_mouse1))
+
+#Load mouse sample 2
+SCEC_mouse2 <- readRDS(here("data/SCEC_mouse2Subtype.RDS"))
+SCEC_mouse2$sample <- rep("GSE162610", ncol(SCEC_mouse2))
+SCEC_mouse2$Tissues <- rep("SCEC", ncol(SCEC_mouse2))
+SCEC_mouse2$BBN <- rep("GSM4955359", ncol(SCEC_mouse2))
+
+
+#Integrate mouse sample data
+mouse_feat <- SelectIntegrationFeatures(object.list = list(SCEC_mouse1, SCEC_mouse2))
+
+mouse_anc <- FindIntegrationAnchors(object.list = list(SCEC_mouse1, SCEC_mouse2), reduction = "cca")
+
+SCEC_mouse <- IntegrateData(anchorset = mouse_anc)
+
+#Visualization
+DefaultAssay(SCEC_mouse) <- "integrated"
+
+all_genes <- rownames(SCEC_mouse)
+        
+SCEC_mouse <- ScaleData(SCEC_mouse, features = all_genes)
+
+SCEC_mouse <- RunPCA(SCEC_mouse, npcs = 40, verbose = FALSE)
+
+SCEC_mouse <- RunUMAP(SCEC_mouse, reduction = "pca", dims = 1:40)
+SCEC_mouse <- FindNeighbors(SCEC_mouse, reduction = "pca", dims = 1:40)
+SCEC_mouse <- FindClusters(SCEC_mouse, resolution = 0.35)
+
+set.seed(1)
+downsample <- sample(Cells(SCEC_mouse), size = 680)
+
+#downsampled mouse dataset
+SCEC_mouse <- subset(SCEC_mouse, cells = downsample)
+
+DimPlot(SCEC_mouse, reduction = "umap", group.by = "orig.ident", pt.size = 1.3) + ggtitle("GSE162610") + theme(plot.title = element_text(hjust = 0.5))
+
+saveRDS(SCEC_mouse, file= "/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/mouse_downsampled.RDS")
+```
+
+
+```{r}
+DefaultAssay(SCEC_mouse) <- "RNA"
+
+FeaturePlot(SCEC_mouse, features = c("CLDN5", "FLT1"))
+
+DimPlot(SCEC_mouse, reduction = "umap", group.by = "subtype", cols = c( "coral2", "chartreuse4", "cornflowerblue"), pt.size = 1.5) + ggtitle("Mouse spinal cord endothelial subtype") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+```{r}
+art <- SCEC_mouse[,SCEC_mouse@meta.data$subtype == "Arterial"]
+
+capi <- SCEC_mouse[,SCEC_mouse@meta.data$subtype == "Capillary"]
+
+veins <- SCEC_mouse[,SCEC_mouse@meta.data$subtype == "Vein"]
+
+tgt <- merge(art, c(capi, veins), add.cell.ids = c("Arterial", "Capillary", "Vein"))
+```
+
+
+```{r}
+col_art <- rep("coral2",ncol(tgt[,tgt@meta.data$subtype=="Arterial"]))
+
+col_capi <- rep("chartreuse4",ncol(tgt[,tgt@meta.data$subtype=="Capillary"]))
+
+col_vein <- rep("cornflowerblue",ncol(tgt[,tgt@meta.data$subtype=="Vein"]))
+
+palette <- c(col_art, col_capi, col_vein)
+
+tgt$color <- palette
+```
+
+
+```{r, fig.width= 8, fig.height= 10}
+par(mfrow = c(3, 1))
+barplot(tgt@assays$RNA@data["BMX",], main = "BMX", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["VEGFC",], main = "VEGFC", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["MGP",], main = "MGP", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["MFSD2A",], main = "MFSD2A", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["SLC16A1",], main = "SLC16A1", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["TFRC",], main = "TFRC", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["NR2F2",], main = "IL1R1", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["VCAM1",], main = "VCAM1", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["IL1R1",], main = "NR2F2", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+```

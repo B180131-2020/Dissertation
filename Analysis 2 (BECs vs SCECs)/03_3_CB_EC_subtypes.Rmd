@@ -1,0 +1,399 @@
+---
+title: "Subset cerebellum endothelial cells"
+author: "Bono"
+date: "18/06/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, include=FALSE}
+load_lib <- "Load Libraries"
+```
+## `r load_lib`
+* Load all the necessary libraries
+
+
+```{r load_lib, message=FALSE}
+library(Seurat) 
+library(dplyr)
+library(here)
+library(ggplot2)
+library(msigdbr)
+library(clusterProfiler)
+library(GSEABase)
+library(org.Hs.eg.db)
+library(SCINA)
+library(tidyr)
+library(scSorter)
+```
+
+```{r load_data, echo=TRUE}
+full_matrix <- readRDS(here("data/srt_anno_01.RDS")) #Load entire dataset
+Idents(full_matrix) <- "clusters_named" #Set identity to clusters_named column on metadata
+```
+
+
+```{r, include=FALSE}
+subset_data <- "Subset CB Endothelial Cell Populations"
+```
+## `r subset_data`
+* Subset for endothelial cells and pericytes populations
+* From the EC and pericyte populations, further subset for CB specific endothelial-pericyte populations
+* Re-calculate mitochondrial gene percentage. Since previously mito percentage is calculated separately for 
+spliced and unspliced matrices, but only the spliced matrix counts mito genes. We expect recalculated mito percentage to be lower.
+
+
+#Subset only CB cells labelled endo-peri1 & 2
+```{r subset_data, echo=FALSE}
+ecpc <- subset(full_matrix, ident = c("Endothelial-Pericyte_1", "Endothelial-Pericyte_2")) #Subset all EC
+##Re-calculate mitochondrial gene percentage###
+mt.genes <- rownames(ecpc)[grep("^MT-",rownames(ecpc))] #identify all mitochondrial genes
+percent.mito <- PercentageFeatureSet(ecpc, pattern = "^MT-")
+ecpc <- AddMetaData(ecpc, percent.mito, col.name = "percent.mito") 
+
+###Subset for CB###
+CB_EC <- subset(x = ecpc, subset=Tissue=="CB") #Subset BECs
+Idents(CB_EC) <- "BECs" #Set identity classes
+Idents(CB_EC)
+tissue_spec <- rep("BEC", ncol(CB_EC)) 
+CB_EC <- AddMetaData(CB_EC, tissue_spec, col.name = "Tissues") #Re-define
+```
+
+
+
+```{r, include=FALSE}
+cluster_EC_Peri <- "Distinguish Endothelial Cells and Pericytes in CB Endo-Pericyte Population"
+```
+## `r cluster_EC_Peri`
+Aims to distinguish between endothelial cells and pericytes of BEC (CB), through feature selection, dimension reduction, and clustering analysis.
+
+* HVG = 2000
+* Perform PCA
+* PC used = 20
+* Clustering
+
+
+```{r cluster_EC_Peri, message=FALSE}
+#Calculate based on variance of log-expression of genes across cells. 2000 HVGs are selected.
+CB_EC <- FindVariableFeatures(CB_EC, selection.method = "vst", nfeatures = 2000)  
+
+#Scale data for PCA
+all.genes <- rownames(CB_EC)
+CB_EC <- ScaleData(CB_EC, features = all.genes) 
+
+#Run PCA
+CB_EC <- RunPCA(CB_EC, features = VariableFeatures(object=CB_EC))
+```
+
+
+#Visualize
+```{r}
+VizDimLoadings(CB_EC, dims = 1:2, reduction = "pca") 
+
+Idents(CB_EC) <- "clusters_named"
+DimPlot(CB_EC, reduction = "pca")
+
+ElbowPlot(CB_EC, ndims = 50)
+```
+
+
+```{r, message=FALSE, warning= FALSE}
+CB_EC <- FindNeighbors(CB_EC, dims = 1:30) #KNN
+CB_EC <- FindClusters(CB_EC, resolution = 0.1) #Louvain algorithm
+Idents(CB_EC) <- "RNA_snn_res.0.1"
+
+CB_EC <- RunUMAP(CB_EC, dims = 1:30)
+
+DimPlot(CB_EC, reduction = "umap", label = T)
+```
+
+
+#Subset for ECs in CB population
+The following markers were used to distinguish cell types:
+
+* endothelial cells: VWF, FLT1, CLDN5, ABCB1, THSD4, PECAM1, CDH5
+* pericytes: PDGFRB, NOTCH3, PRKG1, CSPG4 (NG2)
+
+```{r, fig.width=15, fig.height=13}
+
+#EC  Biomarkers
+FeaturePlot(CB_EC, features = c("VWF",
+                              "FLT1",
+                              "CLDN5",
+                              "ABCB1",
+                              "ST6GALNAC3",
+                              "ELOVL7",
+                              "THSD4",
+                              "PECAM1",
+                              "MECOM"
+                              ))
+```
+
+
+```{r, fig.width= 7, fig.height=10}
+VlnPlot(CB_EC, features = c("VWF", "FLT1", "CLDN5", "ABCB1",  "ST6GALNAC3", "ELOVL7", "THSD4", "PECAM1", "MECOM"))
+```
+
+
+
+```{r, fig.width=15, fig.height=12}
+#Pericyte Biomarkers
+FeaturePlot(CB_EC, features = c("PDGFRB",
+                              "NOTCH3",
+                              "PRKG1",
+                              "CSPG4",
+                              "GPC5",
+                              "RGS5",
+                              "PDE7B"
+                              ))
+```
+
+
+```{r, fig.width= 7, fig.height=10}
+VlnPlot(CB_EC, features = c("PDGFRB", "NOTCH3", "PRKG1", "CSPG4",  "GPC5", "RGS5", "PDE7B"))
+```
+
+
+```{r}
+CB_EC$annotate <- CB_EC$RNA_snn_res.0.1
+
+Idents(CB_EC) <- "annotate"
+
+CB_EC <- RenameIdents(CB_EC, "0" = "Endothelial", "1" = "Pericyte", "2" = "Endothelial")
+
+CB_EC$annotate <- Idents(CB_EC)
+
+DimPlot(CB_EC, label = T, repel = T, group.by = "annotate")
+```
+
+
+```{r, message= FALSE}
+CB_EC <- subset(CB_EC, subset=annotate=="Endothelial")
+saveRDS(CB_EC, "/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/CB_annotated.RDS")
+```
+
+
+
+
+#############################################################################################
+
+
+
+```{r, include=FALSE}
+annot_CB <- "CB endothelial subtype annotation"
+```
+
+
+#Run feature selection
+```{r, fig.width = 15, fig.height= 8, message= FALSE, warning=FALSE}
+CB_EC <- FindVariableFeatures(CB_EC, selection.method = "vst", nfeatures= 2000)
+```
+
+
+#Run PCA
+```{r}
+all.genes <- rownames(CB_EC)
+
+CB_EC <- ScaleData(CB_EC, features = all.genes) #scale all variable genes
+
+CB_EC <- RunPCA(CB_EC, features = VariableFeatures(object=CB_EC))
+
+ElbowPlot(CB_EC, ndims = 50)
+```
+
+
+#Cluster CB-ECs
+```{r, message=FALSE, warning= FALSE}
+CB_EC <- FindNeighbors(CB_EC, dims = 1:30) #KNN
+
+CB_EC <- FindClusters(CB_EC, resolution = 0.2) #Louvain algorithm
+
+Idents(CB_EC) <- "RNA_snn_res.0.2"
+
+CB_EC <- RunUMAP(CB_EC, dims = 1:30)
+
+DimPlot(CB_EC, reduction = "umap", label=T, repel=T)
+```
+
+
+```{r, include=FALSE}
+feature_plt_1 <- "Feature Plots (Artery genes)"
+```
+# `r feature_plt_1`
+
+
+```{r feature_plt_1, fig.width=15, fig.height=12}
+FeaturePlot(CB_EC, features = c("BMX",     #According to Vanlandewijck paper (Mouse)
+                                 "SEMA3G", #According to Vanlandewijck paper (Mouse)
+                                 "VEGFC",  #According to Vanlandewijck paper (Mouse)
+                                 "EFNB2",  #Preferentially on arterial endothelium (Human & mouse)
+                                 "NOTCH1", #Arterial specificaiton and angiogenic potential (Mouse)
+                                 "NOTCH4", 
+                                 "DLL4",   #Canonical NOTCH ligand strongly expressed in arterial ECs
+                                 "HEY2",    #Expressed in humans
+                                 "MGP"
+                                 ))
+```
+
+
+```{r, include=FALSE}
+feature_plt_3 <- "Feature Plots (Capillary genes)"
+```
+# `r feature_plt_3`
+
+
+```{r feature_plt_3, fig.width=15, fig.height=12}
+
+FeaturePlot(CB_EC, features = c("SLC16A1",  #According to Vanlandewijck paper (Mouse)
+                                 "MFSD2A",   #According to Vanlandewijck paper (Mouse)
+                                 "SLC7A5",   #According to Vanlandewijck paper (Mouse)
+                                 "TFRC",     #According to Vanlandewijck paper (Mouse)
+                                 "ABCB1",    #P-glycoprotein (MDR) is often expressed in brain capillary ECs (ABC transporter)(Mouse)
+                                 "ABCG2",    #BCRP also demonstrated before is excessively expressed in brain capillary ECs (ABC transporter)(Human & Mouse)
+                                 "SLC7A5",   #LAT-1 expressed in BBB models, responsible for transport of large neutral AAs, L-dopa and gabapentin by brain capillary ECs (Human & Mouse)
+                                 "SLC2A1"   #GLUT-1 expressed in BBB models, responsible for drug transporter in the brain capillary (Human & Mouse)
+                                 ))
+```
+
+
+```{r, include=FALSE}
+feature_plt_2 <- "Feature Plots (Vein genes)"
+```
+# `r feature_plt_2`
+
+
+```{r feature_plt_2, fig.width=15, fig.height=12}
+FeaturePlot(CB_EC, features = c("NR2F2",   #Expressed in vein ECs (Mouse)
+                                 "VCAM1",   #According to Vanlandewijck paper (Mouse)
+                                 "VWF",     #According to Vanlandewijck paper (Mouse)
+                                 "SLC38A5", #According to Vanlandewijck paper (Mouse)
+                                 "EPHB4", #Preferentially expressed in vein ECs (Human & mouse),
+                                 "EMCN",  #Expressed in humans
+                                 "IL1R1",  #Expressed in Humans
+                                 "ICAM1"
+                                 ))
+```
+
+
+```{r}
+DimPlot(CB_EC, group.by = "Age")
+
+DimPlot(CB_EC, group.by = "BBN")
+
+DimPlot(CB_EC, group.by = "CauseOfDeath_category")
+```
+
+
+```{r, include=FALSE}
+feature_plt_5 <- "Feature Plots (Based on cell quality)"
+```
+#`r feature_plt_5`
+
+
+Clusters 0 and 1 might be clustered based on quality
+```{r}
+FeaturePlot(CB_EC, features = c("nFeature_RNA", "nCount_RNA", "percent.mito"))
+```
+
+
+#Add Subtype Annotations
+```{r, include=FALSE}
+Annot <- "EC Subtype Annotations"
+```
+
+
+Perform scSorter (Cell assign approach 2)
+```{r Annot, message= FALSE}
+Type <- c("Capillary", "Capillary", "Capillary", "Capillary", "Arterial", "Arterial", "Arterial", "Arterial", "Vein", "Vein", "Vein", "Vein", "Vein")
+
+Marker <- c("MFSD2A", "SLC16A1", "SLC7A5", "TFRC", "VEGFC", "HEY2","SEMA3G", "EFNB2", "ICAM1", "IL1R1","EPHB4", "NR2F2", "VCAM1")
+
+Weight <- c(3, 3, 3, 3, 3, 5, 3, 3, 5, 5, 5, 5, 5)
+
+Markerr <- cbind(Type, Marker, Weight)
+
+Markerss <- as.data.frame(Markerr)
+```
+
+
+```{r}
+Annot_EC_3 <- scSorter(CB_EC@assays$RNA@data, Markerss, alpha = 0)
+```
+
+
+```{r}
+Idents(CB_EC) <- Annot_EC_3$Pred_Type
+
+CB_EC$subtype <- Annot_EC_3$Pred_Type
+
+CB_EC <- AddMetaData(CB_EC, metadata = Annot_EC_3$Pred_Type, col.name = "subtype")
+
+CB_EC <- subset(CB_EC, subset = (subtype == "Arterial" | subtype == "Capillary" | subtype == "Vein"))
+
+CB_EC$subtype <- Idents(CB_EC)
+
+DimPlot(CB_EC, reduction = "umap", group.by = "subtype", cols = c("chartreuse4", "coral2", "cornflowerblue")) + ggtitle("CB (Cerebellum) endothelial subtype")
+```
+
+
+```{r, echo = TRUE}
+CellsPerSubtype <- as.data.frame(tapply(
+    CB_EC@meta.data$Barcode, CB_EC@meta.data$subtype, function(x) length(x) ))
+
+names(CellsPerSubtype) <- "NumberOfCells"
+
+CellsPerSubtype$Subtype <- rownames(CellsPerSubtype)
+
+CellsPerSubtype$Subtype <- rownames(CellsPerSubtype)
+
+CellsPerSubtype
+```
+
+
+```{r}
+art <- CB_EC[,CB_EC@meta.data$subtype == "Arterial"]
+
+capi <- CB_EC[,CB_EC@meta.data$subtype == "Capillary"]
+
+veins <- CB_EC[,CB_EC@meta.data$subtype == "Vein"]
+
+tgt <- merge(art, c(capi, veins), add.cell.ids = c("Arterial", "Capillary", "Vein"))
+```
+
+
+```{r}
+col_art <- rep("coral2",ncol(tgt[,tgt@meta.data$subtype=="Arterial"]))
+
+col_capi <- rep("chartreuse4",ncol(tgt[,tgt@meta.data$subtype=="Capillary"]))
+
+col_vein <- rep("cornflowerblue",ncol(tgt[,tgt@meta.data$subtype=="Vein"]))
+
+palette <- c(col_art, col_capi, col_vein)
+
+tgt$color <- palette
+```
+
+
+```{r, fig.width= 8, fig.height= 10}
+par(mfrow = c(3, 1))
+barplot(tgt@assays$RNA@data["HEY2",], main = "HEY2", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["VEGFC",], main = "VEGFC", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["MGP",], main = "MGP", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+#barplot(tgt@assays$RNA@data["EFNB2",], main = "EFNB2", axisnames = FALSE, ylab = "count", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+barplot(tgt@assays$RNA@data["MFSD2A",], main = "MFSD2A", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["SLC16A1",], main = "SLC16A1", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["TFRC",], main = "TFRC", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+#barplot(tgt@assays$RNA@data["EPHB4",], main = "EPHB4", axisnames = FALSE, ylab = "count", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 2)
+barplot(tgt@assays$RNA@data["VCAM1",], main = "VCAM1", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["IL1R1",], main = "IL1R1", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+barplot(tgt@assays$RNA@data["NR2F2",], main = "NR2F2", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+```
+
+
+```{r}
+saveRDS(CB_EC, "/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/CB_SubAnnot.RDS")
+```

@@ -1,0 +1,274 @@
+---
+title: "External SCEC Dataset 2"
+author: "Bono"
+date: "15/06/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+After realizing the SCEC population does not contain enough cells, I will introduce two additional samples of SCEC derived from wildtype adult mouse (6-8 wks) for my comparison between brain and spinal cord ECs.
+
+* Sample = GSM4955359
+
+
+```{r, include=FALSE}
+load_lib <- "Load Libraries"
+```
+## `r load_lib`
+* Load all the necessary libraries
+
+```{r load_lib, message=FALSE}
+library(Seurat) 
+library(dplyr)
+library(scater)
+library(SingleCellExperiment)
+library(here)
+library(ggplot2)
+library(scran)
+library(scuttle)
+library(biomaRt)
+```
+
+
+#Read mouse spinal cord matrix dataset (GSM4955359)(Sample1)
+```{r}
+SCEC_2 <- read.csv(here("data/SC_external_dataset/GSM4955359_qc_filtered_feature_bc_matrix_uninj_sample1.txt"), sep = "\t", row.names = 1, header = T)
+```
+
+
+#Convert mouse gene names to human gene names
+```{r}
+ensembl <- useMart("ensembl")
+ensembl_human <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+ensembl_mouse <- useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+
+mouse_genes <- rownames(SCEC_2)
+
+matched_genes <- getLDS(attributes = "mgi_symbol", 
+                        filters = "mgi_symbol",
+                        values = mouse_genes,
+                        mart = ensembl_mouse,
+                        attributesL = "hgnc_symbol",
+                        martL = ensembl_human)
+```
+
+
+#Save human gene nomenclature to mouse dataset
+```{r}
+matched_genes <- subset(matched_genes, matched_genes$HGNC.symbol != "")
+
+subset_boul <- rownames(SCEC_2) %in% matched_genes$MGI.symbol
+
+SCEC_2 <- SCEC_2[subset_boul,]
+
+subset_boul_2 <- matched_genes$MGI.symbol %in% rownames(SCEC_2)
+
+matched_genes <- matched_genes[match(rownames(SCEC_2), matched_genes$MGI.symbol),]
+
+rownames(SCEC_2) <- make.unique(rownames(SCEC_2))
+
+matched_genes$MGI.symbol <- make.unique(matched_genes$MGI.symbol)
+
+matched_genes$HGNC.symbol <- make.unique(matched_genes$HGNC.symbol)
+
+summary(rownames(SCEC_2) == matched_genes$MGI.symbol)
+
+rownames(SCEC_2) <- matched_genes$HGNC.symbol
+```
+
+
+```{r}
+barcode_meta <- read.table(here("data/SC_external_dataset/GSE162610_barcode_metadata.tsv"))
+
+meta_1 <- barcode_meta[colnames(SCEC_2),]
+
+SCEC_2 <- CreateSeuratObject(counts = SCEC_2, assay = "RNA", meta.data = meta_1)
+
+SCEC_2.sce <- as.SingleCellExperiment(SCEC_2)
+```
+
+
+#Identify outliers of the mouse SC dataset using Scater
+#Based on median absolute deviation (Scater)
+```{r}
+out_mito <- isOutlier(SCEC_2.sce$percent_mt, log = TRUE, type = "higher", nmads = 3)
+
+out_feature <- isOutlier(SCEC_2.sce$nFeature_RNA, log = TRUE, type = "both", nmads = 3)
+
+out_lib <- isOutlier(SCEC_2.sce$nCount_RNA, log = TRUE, type = "both", nmads = 3)
+
+SCEC_2.sce <- SCEC_2.sce[, !c(out_mito | out_feature | out_lib)]
+
+out_mito <- isOutlier(SCEC_2.sce$percent_mt, log = TRUE, type = "higher", nmads = 3)
+
+out_feature <- isOutlier(SCEC_2.sce$nFeature_RNA, log = TRUE, type = "both", nmads = 3)
+
+out_lib <- isOutlier(SCEC_2.sce$nCount_RNA, log = TRUE, type = "both", nmads = 3)
+
+plot_mito <- plotColData(SCEC_2.sce, y = "percent_mt", colour_by = I(out_mito))
+
+plot_feat <- plotColData(SCEC_2.sce, y = "nFeature_RNA", colour_by = I(out_feature))
+
+plot_lib <- plotColData(SCEC_2.sce, y = "nCount_RNA", colour_by = I(out_feature))
+
+gridExtra::grid.arrange(plot_mito, plot_feat, plot_lib, ncol = 3)
+```
+
+
+#Normalize mouse SC dataset using SCRAN from Bioconductor
+#Build SeuratObject again containing raw counts (counts) and logcounts (data)
+```{r}
+clust_1 <- quickCluster(SCEC_2.sce)
+
+SCEC_2.sce <- computeSumFactors(SCEC_2.sce, clusters = clust_1)
+
+SCEC_2.sce <- logNormCounts(SCEC_2.sce)
+
+SCEC_2 <- CreateSeuratObject(counts = counts(SCEC_2.sce), meta.data = as.data.frame(colData(SCEC_2.sce)))
+
+SCEC_2 <- SetAssayData(object = SCEC_2, slot = "data", new.data = logcounts(SCEC_2.sce))
+```
+
+
+#Identify HVGs for dimRed and clustering
+#2000 HVGs chosen here
+```{r cluster_EC_Peri, message=FALSE}
+#Calculate based on variance of log-expression of genes across cells. 2000 HVGs are selected.
+SCEC_2 <- FindVariableFeatures(SCEC_2, selection.method = "vst", nfeatures = 2000)
+top10_vg <- head(VariableFeatures(SCEC_2), 10)
+top10_vg
+```
+
+
+#Plot HVGs from Seurat with and without labels
+```{r, fig.width = 15, fig.height= 8, message= FALSE, warning=FALSE}
+var_genes <- VariableFeaturePlot(SCEC_2)
+labels <- LabelPoints(plot = var_genes, points = top10_vg, repel = TRUE)
+var_genes + labels
+```
+
+
+#Perform PCA
+```{r, message=FALSE}
+all.genes <- rownames(SCEC_2)
+SCEC_2 <- ScaleData(SCEC_2, features = all.genes) #save all variable genes 
+```
+
+
+```{r, message=FALSE}
+#Perform PCA on log-normalised expression values of genes. Number of genes for PCA is based on the HVGs selected above.
+SCEC_2 <- RunPCA(SCEC_2, features = VariableFeatures(object=SCEC_2))
+```
+
+
+```{r, fig.width= 10, fig.height= 8}
+VizDimLoadings(SCEC_2, dims = 1:2, reduction = "pca") 
+```
+
+
+```{r}
+DimPlot(SCEC_2, reduction = "pca")
+```
+
+
+```{r}
+ElbowPlot(SCEC_2, ndims = 50)
+```
+
+
+```{r, include=FALSE}
+cluster <- "Clustering Analysis"
+```
+# `r cluster`
+
+
+#The mouse dataset has been previously annotated. I will check whether the annotations are accurate
+#Cluster resolution set to 0.5
+```{r, message=FALSE, warning= FALSE}
+Idents(SCEC_2) <- "celltype"
+SCEC_2 <- FindNeighbors(SCEC_2, dims = 1:30) #KNN
+SCEC_2 <- FindClusters(SCEC_2, resolution = 0.5) #Louvain algorithm
+Idents(SCEC_2) <- "RNA_snn_res.0.5"
+```
+
+
+```{r, message=FALSE, warning= FALSE}
+##Plot UMAP and t-SNE
+SCEC_2 <- RunUMAP(SCEC_2, dims = 1:30)
+SCEC_2 <- RunTSNE(SCEC_2, dims = 1:30)
+
+DimPlot(SCEC_2, reduction = "umap", label = T)
+DimPlot(SCEC_2, reduction = "tsne", label = T)
+DimPlot(SCEC_2, reduction = "pca", label = F, pt.size = 2)
+
+Idents(SCEC_2) <- "celltype"
+Endo <- WhichCells(SCEC_2, idents = "Endothelial")
+
+DimPlot(SCEC_2, group.by = "celltype", cells.highlight = Endo) + scale_color_manual(labels = c("Other", "Endothelial"), values = c("grey", "darkblue")) + ggtitle("GSM4955359")
+
+DimPlot(SCEC_2, group.by = "celltype")
+```
+
+
+```{r, include=FALSE}
+feature_plt_1 <- "Feature Plots (EC genes)"
+```
+## `r feature_plt_1`
+
+
+```{r feature_plt_1, fig.width=15, fig.height=13}
+#EC  Biomarkers
+FeaturePlot(SCEC_2, features = c("FLT1",
+                              "CLDN5",
+                              "ABCG2",
+                              "ELOVL7",
+                              "PECAM1",
+                              "MECOM"
+                              ))
+```
+
+
+```{r, include=FALSE}
+feature_plt_2 <- "Feature Plots (Pericyte genes)"
+```
+## `r feature_plt_2`
+
+
+```{r feature_plt_2, fig.width=15, fig.height=12}
+
+#Pericyte Biomarkers
+FeaturePlot(SCEC_2, features = c("PDGFRB",
+                              "NOTCH3",
+                              "PRKG1",
+                              "CSPG4",
+                              "GPC5",
+                              "RGS5",
+                              "PDE7B"
+                              ))
+```
+
+
+#Save SCEC sample 1
+```{r, message= FALSE}
+SCEC_2 <- subset(SCEC_2, subset=celltype=="Endothelial")
+```
+
+
+```{r, include=FALSE}
+feature_plt_3 <- "Verify subsetted SCEC population"
+```
+## `r feature_plt_3`
+
+
+```{r}
+FeaturePlot(SCEC_2, feature = c("CLDN5", "FLT1", "PECAM1", "ABCB1")) #EC marker
+
+FeaturePlot(SCEC_2, feature = c("PDGFRB", "CSPG4", "GPC5", "RGS5")) #Pericyte marker
+```
+
+```{r}
+saveRDS(SCEC_2, "/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/SCEC_mouse_2.RDS")
+```

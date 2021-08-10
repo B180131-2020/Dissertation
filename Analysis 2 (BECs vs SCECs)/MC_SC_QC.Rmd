@@ -1,0 +1,162 @@
+---
+title: "BECs vs SCECs scRNA-seq Analysis (Pre-processing)"
+author: "Tin Long Cheong"
+date: "19/05/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+This is the scRNA-seq analysis workflow for comparing human brain endothelial cells vs human spinal cord endothelial cells. This allows for better understanding of how neurovascular functions are contributed by selected populations of EC populations. Required packages involve Seurat and Bioconductor. 
+
+This dataset was obtained from Luise and had previously undergone rigorous QC and normalisation. This script
+serves the purpose to verify and visualise the QC metrics through plots.
+
+
+```{r, include=FALSE}
+load_lib <- "Load Libraries"
+```
+## `r load_lib`
+* Load all the necessary libraries
+```{r load_lib, message=FALSE}
+library(Seurat) 
+library(dplyr)
+library(scater)
+library(SingleCellExperiment)
+library(here)
+library(ggplot2)
+library(ggsci)
+library(scales)
+```
+
+
+Pick colour paletts
+
+```{r}
+mypal <- pal_npg("nrc", alpha = 0.7)(10)
+mypal2 <-pal_tron("legacy", alpha = 0.7)(7)
+mypal3 <- pal_lancet("lanonc", alpha = 0.7)(9)
+mypal4 <- pal_simpsons(palette = c("springfield"), alpha = 0.7)(16)
+mypal5 <- pal_rickandmorty(palette = c("schwifty"), alpha = 0.7)(6)
+mypal6 <- pal_futurama(palette = c("planetexpress"), alpha = 0.7)(5)
+mypal7 <- pal_startrek(palette = c("uniform"), alpha = 0.7)(5)
+mycoloursP<- c(mypal, mypal2, mypal3, mypal4, mypal5, mypal6, mypal7)
+show_col(mycoloursP, labels =F)
+```
+
+
+```{r, include=FALSE}
+load_data <- "Load scRNA Dataset"
+```
+## `r load_data`
+* Load the RDS file of Luise's dataset
+```{r load_data, echo=TRUE}
+full_matrix <- readRDS(here("data/srt_anno_01.RDS")) #Load entire dataset
+Idents(full_matrix) <- "clusters_named" #Set identity to clusters_named column on metadata
+```
+
+
+#Plot full dataset containing all cell types 
+#Color only endothelial population
+```{r}
+Endo_1 <- WhichCells(full_matrix, idents = "Endothelial-Pericyte_1")
+
+Endo_2 <- WhichCells(full_matrix, idents = "Endothelial-Pericyte_2")
+
+DimPlot(full_matrix, reduction = "umap", group.by = "clusters_named", cols = c(mycoloursP[1:30])) + ggtitle("Tissues within endothelial population") 
+
+DimPlot(full_matrix, label = F, group.by = "clusters_named", cells.highlight = list(Endo_1, Endo_2)) + scale_color_manual(labels = c("Others", "Endothelial-Pericyte_2", "Endothelial-Pericyte_1"), values = c("grey", "firebrick3", "dodgerblue3")) + ggtitle("Celltype population")
+
+
+FeaturePlot(full_matrix, features = c("CLDN5", "FLT1"))
+
+EC <- subset(full_matrix, subset=(clusters_named=="Endothelial-Pericyte_1" | clusters_named=="Endothelial-Pericyte_2"))
+
+DimPlot(EC, group.by = "Tissue") + ggtitle("Tissues within endothelial population") 
+
+DimPlot(full_matrix, reduction = "umap", group.by = "clusters_named", cols = c(mycoloursP[c(60,60, 60, 60,54,55,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60)])) + ggtitle("Seeker dataset") + NoLegend()
+```
+
+
+```{r, include=FALSE}
+subset_data <- "Subset BA4 and CSC Endothelial Cell Populations"
+```
+## `r subset_data`
+* Subset for endothelial cells and pericytes populations
+* From the EC and pericyte populations, further subset for BA4 and CSC specific endothelial-pericyte populations
+* Re-calculate mitochondrial gene percentage. Since previously mito percentage is calculated separately for 
+spliced and unspliced matrices, but only the spliced matrix counts mito genes. We expect recalculated mito percentage to be lower.
+
+```{r subset_data, echo=TRUE}
+ecpc <- subset(full_matrix, ident = c("Endothelial-Pericyte_1", "Endothelial-Pericyte_2")) #Subset all EC regardless of tissue
+###Re-calculate mitochondrial gene percentage###
+mt.genes <- rownames(ecpc)[grep("^MT-",rownames(ecpc))] #identify all mitochondrial genes
+percent.mito <- PercentageFeatureSet(ecpc, pattern = "^MT-")
+ecpc <- AddMetaData(ecpc, percent.mito, col.name = "percent.mito") 
+
+###Subset for CSC###
+CSC_EC <- subset(x= ecpc, subset=Tissue=="CSC") #Subset SCECs
+Idents(CSC_EC) <- "SCECs" #Set identity classes
+tissue_spec <- rep("SCEC", ncol(CSC_EC)) 
+CSC_EC <- AddMetaData(CSC_EC, tissue_spec, col.name = "Tissues") #Re-define
+
+###Subset for BA4###
+BA4_EC <- subset(x = ecpc, subset=Tissue=="BA4") #Subset BECs
+Idents(BA4_EC) <- "BECs" #Set identity classes
+Idents(BA4_EC)
+tissue_spec <- rep("BEC", ncol(BA4_EC)) 
+BA4_EC <- AddMetaData(BA4_EC, tissue_spec, col.name = "Tissues") #Re-define
+
+
+#Merge two SeuratObjects
+BA4_CSC <- merge(CSC_EC, BA4_EC)
+saveRDS(BA4_CSC, "/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/BA4_CSC_QC.RDS")
+BA4_CSC_sce <- as.SingleCellExperiment(BA4_CSC) #Convert to SingleCellExperiment object
+```
+
+
+```{r, include=FALSE}
+EC_pop <- "Check Endothelial Cell Population"
+```
+## `r EC_pop`
+* Cells were previously labelled with identity. For verification, the top 50 highest expressed genes of our BEC (BA4) and SCEC (CSC) were plotted. Claudin-5 is a classic biomarker of ECs, confirming the subsetted data are indeed EC populations.
+
+```{r EC_pop, echo=TRUE}
+EC_check <- plotHighestExprs(BA4_CSC_sce,  exprs_values = "counts") #Plot top 50 highest expressed genes
+EC_check
+```
+
+```{r, include=FALSE}
+plot_QC <- "Quality Control"
+```
+## `r plot_QC`
+* A series of QC plots evaluating different aspects of the scRNA data.
+* Violin plot showing three QC metrics of the data. No outliers (data not shown)
+* Scatter plot showing the ratio between QC metrics. (Alpha shading used here from Scater)
+* Plot of cell cycle score. Not major issues.
+
+```{r plot_QC, echo=TRUE}
+###Re-calculation of mitochondrial gene percentage###
+QC_mito_BeforeAfter <- VlnPlot(BA4_CSC, features= c("percent.mt", "percent.mito")) #Violin of mito percentage re-calculation
+QC_mito_BeforeAfter 
+
+###Plot QC Metrics###
+QC_VLN <- VlnPlot(BA4_CSC, features = c("nFeature_RNA", "nCount_RNA", "percent.mito")) #Violin plot
+QC_VLN
+
+###Plot Metric Ratio###
+Scater_scatter1 <- plotColData(BA4_CSC_sce, x ="nCount_RNA", y = "nFeature_RNA", colour_by = "Tissues")
+Scater_scatter2 <- plotColData(BA4_CSC_sce, x ="nCount_RNA", y = "percent.mito", colour_by = "Tissues")
+multiplot(Scater_scatter1, Scater_scatter2, cols=2) #Plot scatter plot of QC metrics
+
+###Cell cycle scores###
+CC_score <- CellCycleScoring(                 #Generate cc scores
+        object = BA4_CSC,
+        g2m.features = cc.genes$g2m.genes,
+        s.features = cc.genes$s.genes
+)
+
+QC_CC <- VlnPlot(CC_score, features = c("S.Score","G2M.Score")) #Plot scores
+QC_CC
+```
