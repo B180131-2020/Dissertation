@@ -1,0 +1,183 @@
+---
+title: "Subtype annotaiton of pulmonary ECs"
+author: "Bono"
+date: "03/07/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r load_lib, message=FALSE}
+library(Seurat) 
+library(dplyr)
+library(scater)
+library(SingleCellExperiment)
+library(here)
+library(ggplot2)
+library(scran)
+library(fgsea)
+library(msigdbr)
+library(clusterProfiler)
+library(GSEABase)
+library(org.Hs.eg.db)
+library(SCINA)
+library(scSorter)
+library(cowplot)
+```
+
+
+# Following previous script, the endothelial dataset from GSE135893 has been integrated to get rid of batch effect
+
+* Here, we will annotate the subtype of ECs for this integrated object using scSorter
+* The UMAP visualization of the pulmonary-ECs generated three distinct subclusters. It is believed that these three subclusters were separated based on subtype
+* Subtype markers are primarily referenced from Haln's research but also from literature
+
+
+```{r}
+comb_lungEC <- readRDS("/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/lungEC_int.RDS")
+
+DefaultAssay(comb_lungEC) <- "RNA"
+```
+
+
+#Generate marker file as input for scSorter
+
+* Arterial markers: GJA5 (Su), CXCL12 (Haln), BMX (Valendewijck)
+* Capillary markers: CA4 (Haln & Fleming et al), PRX (Wang), RGCC (Kalucka)
+* Vein markers: ACKR1 (Thiriot), NR2F2 (Schupp), CPE (Schupp)
+
+
+
+#Feature plot for the visualization of pulmonary-EC subtype markers 
+
+*Arterial markers
+```{r}
+plot_art <- FeaturePlot(comb_lungEC, features = c("GJA5", "CXCL12", "BMX"))
+plot_grid(ggdraw() + draw_label("Pulmonary arterial EC markers", size = 13, fontface = "bold"), plot_art, ncol = 1, rel_heights = c(0.1,1))
+```
+
+
+*Capillary markers
+```{r}
+plot_cap <- FeaturePlot(comb_lungEC, features = c("CA4", "RGCC", "PRX"))
+plot_grid(ggdraw() + draw_label("Pulmonary capillary EC markers", size = 13, fontface = "bold"), plot_cap, ncol = 1, rel_heights = c(0.1,1))
+```
+
+
+*Vein markers
+```{r}
+plot_vein <- FeaturePlot(comb_lungEC, features = c("ACKR1", "NR2F2", "CPE"))
+plot_grid(ggdraw() + draw_label("Pulmonary vein EC markers", size = 13, fontface = "bold"), plot_vein, ncol = 1, rel_heights = c(0.1,1))
+```
+
+#scSorter uses the data slot from SeuratObject
+```{r}
+DefaultAssay(comb_lungEC) <- "RNA"
+```
+
+
+#Generate marker file
+```{r}
+Type <- c("Capillary", "Capillary", "Capillary", "Arterial", "Arterial", "Arterial", "Vein", "Vein", "Vein")
+
+Marker <- c("CA4", "RGCC", "PRX", "GJA5", "CXCL12", "BMX", "ACKR1", "CPE", "NR2F2")
+
+Weight <- c(5, 5, 2, 2, 5, 5, 5, 3, 5)
+
+Markers <- cbind(Type, Marker, Weight)
+
+Markers <- as.data.frame(Markers)
+```
+
+
+#Subtype annotate
+```{r}
+annotate <- scSorter(comb_lungEC@assays$RNA@data, Markers, alpha = 0)
+```
+
+
+#Add to metadata
+```{r}
+comb_lungEC$subtype <- annotate$Pred_Type
+
+Idents(comb_lungEC) <- "subtype"
+
+comb_lungEC <- subset(comb_lungEC, subset = (subtype == "Arterial" | subtype == "Capillary" | subtype == "Vein"))
+```
+
+
+#Visualize subtype annotation
+```{r}
+DimPlot(comb_lungEC, reduction = "umap", group.by = "subtype", cols = c("coral2", "chartreuse4","cornflowerblue")) + ggtitle("Pulmonary EC subtype") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+#Save pre-processed pulmonary-EC dataset
+```{r}
+saveRDS(comb_lungEC, file = "/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/pEC_SubAnnot.RDS")
+```
+
+
+#Number of cells in each subtype
+```{r}
+art <- comb_lungEC[,comb_lungEC@meta.data$subtype == "Arterial"]
+
+capi <- comb_lungEC[,comb_lungEC@meta.data$subtype == "Capillary"]
+
+veins <- comb_lungEC[,comb_lungEC@meta.data$subtype == "Vein"]
+
+tgt <- merge(art, c(capi, veins), add.cell.ids = c("Arterial", "Capillary", "Vein"))
+```
+
+
+```{r, echo = TRUE}
+CellsPerSubtype <- as.data.frame(tapply(
+    comb_lungEC@meta.data$orig.ident, comb_lungEC@meta.data$subtype, function(x) length(x) ))
+
+names(CellsPerSubtype) <- "NumberOfCells"
+
+CellsPerSubtype$Subtype <- rownames(CellsPerSubtype)
+
+CellsPerSubtype$Subtype <- rownames(CellsPerSubtype)
+
+CellsPerSubtype
+```
+
+
+```{r}
+col_art <- rep("coral2",ncol(tgt[,tgt@meta.data$subtype=="Arterial"]))
+
+col_capi <- rep("chartreuse4",ncol(tgt[,tgt@meta.data$subtype=="Capillary"]))
+
+col_vein <- rep("cornflowerblue",ncol(tgt[,tgt@meta.data$subtype=="Vein"]))
+
+palette <- c(col_art, col_capi, col_vein)
+
+tgt$color <- palette
+```
+
+
+#Generate expression barplot
+```{r}
+par(mfrow = c(3, 1))
+barplot(tgt@assays$RNA@data["GJA5",], main = "GJA5", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5) 
+
+barplot(tgt@assays$RNA@data["CXCL12",], main = "CXCL12", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+
+barplot(tgt@assays$RNA@data["BMX",], main = "BMX", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+
+barplot(tgt@assays$RNA@data["CA4",], main = "CA4", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+
+barplot(tgt@assays$RNA@data["RGCC",], main = "RGCC", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+
+barplot(tgt@assays$RNA@data["PRX",], main = "PRX", axisnames = FALSE, border = tgt$color, ylab = "Expression", cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+
+barplot(tgt@assays$RNA@data["ACKR1",], main = "ACKR1", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+
+barplot(tgt@assays$RNA@data["CPE",], main = "CPE", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+
+barplot(tgt@assays$RNA@data["NR2F2",], main = "NR2F2", axisnames = FALSE, ylab = "Expression", border = tgt$color, cex.axis = 2, cex.main = 3, cex.lab = 1.5)
+```

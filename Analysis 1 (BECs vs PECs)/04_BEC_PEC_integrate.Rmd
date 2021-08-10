@@ -1,0 +1,164 @@
+---
+title: "Integrate pulmonary ECs with BECs (BA4 & CB)"
+author: "Bono"
+date: "04/07/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+#From previous script, we annotated PECs to either arterial, capillary, and vein.
+
+* We are loading in an integrated object and integrate this with Luise's dataset.
+
+* When integrating integrated objects, we don't need to carry out normalization of the data. Because we will be using the integrated assay. We don't need to select HVG for this object as well, because this Seurat function is not supported on integrated assay.
+
+```{r load_lib, message=FALSE}
+library(Seurat) 
+library(dplyr)
+library(scater)
+library(SingleCellExperiment)
+library(here)
+library(ggplot2)
+library(scran)
+library(scuttle)
+library(Matrix)
+library(biomaRt)
+library(reshape2)
+library(ggsci)
+library(scales)
+```
+
+
+```{r, echo= FALSE}
+mypal <- pal_npg("nrc", alpha = 0.7)(10)
+mypal2 <-pal_tron("legacy", alpha = 0.7)(7)
+mypal3 <- pal_lancet("lanonc", alpha = 0.7)(9)
+mypal4 <- pal_simpsons(palette = c("springfield"), alpha = 0.7)(16)
+mypal5 <- pal_rickandmorty(palette = c("schwifty"), alpha = 0.7)(6)
+mypal6 <- pal_futurama(palette = c("planetexpress"), alpha = 0.7)(5)
+mypal7 <- pal_startrek(palette = c("uniform"), alpha = 0.7)(5)
+mycoloursP<- c(mypal, mypal2, mypal3, mypal4, mypal5, mypal6, mypal7)
+show_col(mycoloursP, labels =F)
+```
+
+
+#Load in BA4 and CB Seurat data
+* These had been previously quality controlled and normalized based on tissue.
+* These objects can be merged together, since there is no batch affect
+* Normalizing on this new merged object may be optional but not mandatory. 
+* This merged object requires the selection of HVGs then go through integrated workflow with the integrated PEC dataset
+
+
+```{r}
+BA4 <- readRDS(here("data/BA4_SubAnnot.RDS"))
+
+CB <- readRDS(here("data/CB_SubAnnot.RDS"))
+```
+
+
+#Merge tissue dataset
+```{r}
+BEC <- merge(BA4, CB, add.cell.ids = c("BA4", "CB"))
+```
+
+
+* The lung-EC dataset does not need prior processing, because the integrated assay will be used. This means that the normalization and HVG selection is not necessary.
+
+
+#Load pulmonary-EC integrated object (PEC)
+#Downsample the PEC integrated object so that ECs from both tissue remains consistent
+```{r}
+PEC <- readRDS(here("data/pEC_SubAnnot.RDS"))
+
+PEC <- AddMetaData(PEC, metadata = rep("GSE135893", ncol(PEC)), col.name = "Tissue")
+
+PEC <- AddMetaData(PEC, metadata = rep("PEC", ncol(PEC)), col.name = "Tissues")
+
+DefaultAssay(PEC) <- "integrated"
+```
+
+
+#Normalize and find HVG for BEC object required prior integration
+```{r}
+BEC <- NormalizeData(BEC, verbose = FALSE)
+
+BEC <- FindVariableFeatures(BEC, selection.method = "vst", nfeatures = 2000, verbose = FALSE)
+```
+
+#Before integration visualization
+```{r}
+test <- merge(BEC, PEC)
+
+test <- FindVariableFeatures(test, selection.method = "vst", nfeatures = 2000)
+
+test_genes <- rownames(test)
+
+test <- ScaleData(test, features = test_genes, verbose = FALSE)
+
+test <- RunPCA(test, npcs = 50, verbose = FALSE)
+
+test <- RunUMAP(test, dims = 1:30)
+
+DimPlot(test, group.by = "Tissue", cols = mycoloursP[1:3]) + ggtitle("Before integration") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+#Integrate
+```{r}
+features <- SelectIntegrationFeatures(object.list = list(BEC, PEC))
+
+EC.anchors <- FindIntegrationAnchors(object.list = list(BEC, PEC), anchor.features = features)
+
+EC.comb <- IntegrateData(anchorset = EC.anchors)
+```
+
+
+#Run through integration workflow
+```{r}
+DefaultAssay(EC.comb) <- "integrated"
+
+all_genes <- rownames(EC.comb)
+
+EC.comb <- ScaleData(EC.comb, features = all_genes)
+
+EC.comb <- RunPCA(EC.comb, npcs = 30, verbose =FALSE)
+
+EC.comb <- RunUMAP(EC.comb, reduction = "pca", dims = 1:30)
+
+EC.comb <- FindNeighbors(EC.comb, reduction = "pca", dims = 1:30)
+
+EC.comb <- FindClusters(EC.comb, resolution = 0.1)
+```
+
+
+#Add a metadata column specifying subtype + tissue-EC type
+```{r}
+EC.comb$sub_tis <- paste(EC.comb$subtype, EC.comb$Tissues, sep = "-")
+```
+
+
+#Visualize integration effect
+```{r}
+DimPlot(EC.comb, group.by = "Tissue", cols = mycoloursP[1:3]) + ggtitle("After integration (CCA)") + theme(plot.title = element_text(hjust = 0.5))
+
+DimPlot(EC.comb, group.by = "Tissues", cols = ) + ggtitle("BEC + Pulmonary-EC") + theme(plot.title = element_text(hjust = 0.5))
+
+DimPlot(EC.comb, group.by = "subtype") + ggtitle("Subtype") + theme(plot.title = element_text(hjust = 0.5)) 
+
+DimPlot(EC.comb, reduction = "umap", group.by = "sub_tis", label = FALSE) + ggtitle("Subtype-Tissue") + theme(plot.title = element_text(hjust = 0.5))
+
+Idents(EC.comb) <- "integrated_snn_res.0.1"
+
+DimPlot(EC.comb, reduction = "umap", label = FALSE) + ggtitle("Subclustering") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+```{r}
+saveRDS(EC.comb, file = "/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/BEC_PEC.RDS")
+```
+
+

@@ -1,0 +1,182 @@
+---
+title: "GSE135893 (Public lung dataset)"
+author: "Bono"
+date: "30/06/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This is the scRNA-seq analysis workflow for comparing human brain endothelial cells vs human lung endothelial cells. This allows for better understanding of how tissue-specific ECs provide specific requirements for a given vascular bed. Required packages involve Seurat and Bioconductor. 
+
+Lung dataset was obtained from GSE135893 and had been annotated with all cell types including endothelial cells. This script aims to carry out QC on the dataset.
+
+
+#Load libraries
+```{r load_lib, echo=FALSE}
+library(Seurat) 
+library(dplyr)
+library(scater)
+library(SingleCellExperiment)
+library(here)
+library(ggplot2)
+library(ggsci)
+library(scales)
+library(scran)
+```
+
+
+Pick colour paletts
+
+```{r, echo= FALSE}
+mypal <- pal_npg("nrc", alpha = 0.7)(10)
+mypal2 <-pal_tron("legacy", alpha = 0.7)(7)
+mypal3 <- pal_lancet("lanonc", alpha = 0.7)(9)
+mypal4 <- pal_simpsons(palette = c("springfield"), alpha = 0.7)(16)
+mypal5 <- pal_rickandmorty(palette = c("schwifty"), alpha = 0.7)(6)
+mypal6 <- pal_futurama(palette = c("planetexpress"), alpha = 0.7)(5)
+mypal7 <- pal_startrek(palette = c("uniform"), alpha = 0.7)(5)
+mycoloursP<- c(mypal, mypal2, mypal3, mypal4, mypal5, mypal6, mypal7)
+show_col(mycoloursP, labels =F)
+```
+
+
+#Load data
+#Since the compute for this block takes a lot of time (file too large)
+#This has already been ran and we will import the RDS object immediately from the block below
+```{r, echo = FALSE}
+#data_dir <- "/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/GSE135893/"
+
+#GSE135893 <- Read10X(data.dir = data_dir, gene.column = 1)
+
+#barcode_meta <- read.csv(here("data/GSE135893/GSE135893_IPF_metadata.csv"), row.names = 1)
+
+#meta_1 <- barcode_meta[colnames(GSE135893),]
+
+#seur_obj <- CreateSeuratObject(counts=GSE135893, meta.data = meta_1)
+
+#saveRDS(seur_obj, file = "/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/full_matrix.RDS")
+```
+
+
+#Import seurat object of entire dataset 
+```{r}
+seur_obj <- readRDS(here("data/GSE135893/full_matrix.RDS"))
+```
+
+
+#Subset only control samples for pre-processing
+GSE135893 contains 8 control lung biospies with identified age. We excluded two control samples because these captured very little lung-ECs (< 40). The control samples to be used are:
+
+* VUHD69 
+* VUHD65
+* VUHD67
+* VUHD68
+* VUHD70
+* VUHD071
+
+#Subset 
+
+* Subset only control samples from the raw dataset
+```{r}
+cont_samp <- subset(seur_obj, subset=(Sample_Name=="VUHD69" | Sample_Name=="VUHD071" | Sample_Name=="VUHD65" | Sample_Name=="VUHD67" | Sample_Name=="VUHD68" | Sample_Name=="VUHD70"))
+```
+
+
+#Quality control of control dataset (Scater)
+Remove cells based on outlier as 3 MAD
+
+```{r}
+cont_samp.sce <- as.SingleCellExperiment(cont_samp) 
+
+out_mito <- isOutlier(cont_samp.sce$percent.mt, log = TRUE, type = "higher", nmads = 3)
+
+out_feat <- isOutlier(cont_samp.sce$nFeature_RNA, log = TRUE, type = "both", nmads = 3)
+
+out_count <- isOutlier(cont_samp.sce$nCount_RNA, log = TRUE, type = "both", nmads = 3)
+
+discard <- out_mito | out_feat | out_count
+
+cont_samp.sce <- cont_samp.sce[, !discard] 
+```
+
+
+#Normalize dataset
+Normalise using Scran to stay consistent with Luise's dataset
+
+```{r}
+clusters <- quickCluster(cont_samp.sce)
+
+cont_samp.sce <- computeSumFactors(cont_samp.sce, clusters = clusters)
+
+cont_samp.sce <- logNormCounts(cont_samp.sce)
+```
+
+
+#Convert to SeuratObject
+```{r}
+cont_samp <- CreateSeuratObject(counts = counts(cont_samp.sce), meta.data = as.data.frame(colData(cont_samp.sce)))
+
+cont_samp <- SetAssayData(object = cont_samp, slot = "data", new.data = logcounts(cont_samp.sce))
+```
+
+
+#Save cont_samp object
+```{r}
+saveRDS(cont_samp, file = "/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/cont_samp.RDS")
+```
+
+
+#Sample integration on the control dataset
+```{r}
+cont.list <- SplitObject(cont_samp, split.by = "Sample_Name")
+
+for (i in 1:length(cont.list)){
+        cont.list[[i]] <- NormalizeData(cont.list[[i]], verbose = FALSE)
+        cont.list[[i]] <- FindVariableFeatures(cont.list[[i]], selection.method = "vst", nfeatures = 2000, verbose = FALSE)
+}
+```
+
+
+```{r}
+features <- SelectIntegrationFeatures(object.list = cont.list, verbose = FALSE)
+
+cont.anchors <- FindIntegrationAnchors(object.list = cont.list, anchor.features = features, dims = 1:30, verbose = FALSE)
+
+cont.int <- IntegrateData(anchorset= cont.anchors, dims = 1:30, verbose = FALSE)
+```
+
+
+#UMAP visualization of integrated object
+```{r}
+DefaultAssay(cont.int) <- "integrated"
+
+all_genes <- rownames(cont.int)
+
+cont.int <- ScaleData(cont.int, verbose = FALSE, block.size = 150) 
+
+cont.int <- RunPCA(cont.int, npcs = 30, verbose =FALSE)
+
+cont.int <- RunUMAP(cont.int, reduction = "pca", dims = 1:30)
+```
+
+
+#Visualize
+```{r}
+DimPlot(cont.int, reduction = "umap", group.by = "celltype", cols = mycoloursP[20:50])
+
+DimPlot(cont.int, reduction = "umap", group.by = "Sample_Name")
+
+DefaultAssay(cont.int) <- "RNA"
+FeaturePlot(cont.int, features = c("CLDN5", "PECAM1"))
+```
+
+
+#Save integrated lung dataset
+````{r}
+DefaultAssay(cont.int) <- "integrated"
+
+saveRDS(cont.int, file = "/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/int_lung.RDS")
+```

@@ -1,0 +1,142 @@
+---
+title: "Lung endothelial subtype annotation"
+author: "Bono"
+date: "01/07/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# The control lung dataset has been previously batch corrected. However, we identified that batch effect still exist at the endothelial cell level
+
+* As a result, our alternative is to subset pulmonary-ECs and carry out batch correction at the celltype level
+
+* Note that the QC-ed and normalized control dataset (unintegrated) will be used for endothelial subsetting and batch correction.
+
+
+#Load libraries
+```{r load_lib, message=FALSE}
+library(Seurat) 
+library(dplyr)
+library(scater)
+library(SingleCellExperiment)
+library(here)
+library(ggplot2)
+library(scran)
+library(fgsea)
+library(msigdbr)
+library(clusterProfiler)
+library(GSEABase)
+library(org.Hs.eg.db)
+library(SCINA)
+library(scSorter)
+library(ggsci)
+```
+
+
+#Subset endothelial cells from control dataset
+```{r}
+cont_samp <- readRDS(here("data/cont_samp.RDS"))
+
+Idents(cont_samp) <- "Sample_Name"
+
+lung_EC <- subset(cont_samp, subset=(celltype=="Endothelial Cells" & population == "Endothelial"))
+```
+
+
+#Feature selection of pulmonary-EC
+```{r}
+lung_EC <- FindVariableFeatures(lung_EC, selection.method = "vst", nfeatures = 2000, verbose = FALSE)
+
+all.genes <- rownames(lung_EC)
+
+lung_EC <- ScaleData(lung_EC, features = all.genes, verbose = FALSE) #save all variable genes 
+```
+
+
+#Run PCA
+```{r}
+lung_EC <- RunPCA(lung_EC, features = VariableFeatures(object = lung_EC), verbose = FALSE)
+
+DimPlot(lung_EC, reduction = "pca")
+
+VizDimLoadings(lung_EC, dims = 1:2, reduction = "pca") 
+
+ElbowPlot(lung_EC, ndims = 50)
+```
+
+
+#Visualize batch effect
+```{r}
+lung_EC <- RunUMAP(lung_EC, dims = 1:25, verbose = FALSE)
+
+DimPlot(lung_EC, reduction = "umap", group.by = "Sample_Name")
+
+DimPlot(lung_EC, reduction = "umap", group.by = "orig.ident")
+
+DimPlot(lung_EC, reduction = "umap", group.by = "Sample_Source")
+
+DimPlot(lung_EC, reduction = "umap")
+
+FeaturePlot(lung_EC, features = c("CLDN5", "PECAM1", "CD146"))
+```
+
+
+#UMAP shows that there is a batch effect at the endothelial cell level
+* We will batch correct the endothelial cells
+
+
+#Integration
+```{r}
+lung.list <- SplitObject(lung_EC, split.by = "Sample_Name")
+```
+
+
+#Normalize on individual dataset
+#Select HVGs again, but for individual samples of lung-EC
+```{r}
+for (i in 1:length(lung.list)){
+        lung.list[[i]] <- NormalizeData(lung.list[[i]], verbose = FALSE)
+        lung.list[[i]] <- FindVariableFeatures(lung.list[[i]], selection.method = "vst", nfeatures = 2000, verbose = FALSE)
+}
+```
+
+
+#Correct batch effect with CCA
+#Also CCA is an integration method, this is used here for batch correction, because there shouldn't biological differences between the samples, since they are based on the same condition. So there we are not worried about overcorrection.
+```{r}
+features <- SelectIntegrationFeatures(object.list = lung.list, verbose = FALSE)
+
+lung.anchors <- FindIntegrationAnchors(object.list = lung.list, anchor.features = features, verbose = FALSE)
+
+lung.integrated <- IntegrateData(anchorset= lung.anchors, verbose = FALSE, k.weight = 90)
+```
+
+
+#Visualize integrated lung-ECs 
+```{r}
+DefaultAssay(lung.integrated) <- "integrated"
+
+all_genes <- rownames(lung.integrated)
+lung.integrated <- ScaleData(lung.integrated, features = all_genes, verbose = FALSE)
+lung.integrated <- RunPCA(lung.integrated, npcs = 25, verbose = FALSE)
+lung.integrated <- RunUMAP(lung.integrated, reduction = "pca", dims = 1:25)
+lung.integrated <- FindNeighbors(lung.integrated, reduction = "pca", dims = 1:25)
+lung.integrated <- FindClusters(lung.integrated, resolution = 0.01)
+```
+
+
+#Since lung endothelial cells form three distinct clusters, I decided to only use the biggest cluster here for the analysis between BECs and pulmonary-ECs. 
+```{r}
+DimPlot(lung.integrated, reduction = "umap", group.by = "Sample_Name") + ggtitle("Pulmonary ECs (Sample)") + theme(plot.title = element_text(hjust = 0.5))
+
+FeaturePlot(lung.integrated, features = c("CLDN5", "PECAM1"))
+```
+
+
+#Subset only subcluster 0, containing the biggest subcluster of lung-ECs
+```{r}
+saveRDS(lung.integrated, "/Users/bonocheong/Desktop/Research_Project/Datasets/Dissertation/data/lungEC_int.RDS")
+```

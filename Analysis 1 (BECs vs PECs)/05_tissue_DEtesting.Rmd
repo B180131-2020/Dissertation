@@ -1,0 +1,466 @@
+---
+title: "05_tissue_DE_testing"
+author: "Bono"
+date: "07/07/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# From previous script, BECs and PECs were integrated into a single SeuratObject for analysis
+
+* It is found that these two tissue-specific ECs do not overlap and the same outcome has appeared in previous literature (Feng et al 2019)
+
+# From this we will proceed to a direct DE testing between BECs and PECs:
+* Capillary-BECs vs Capillary-PECs
+* Vein-BECs vs Vein-PECs
+* Arterial-BECs vs Arterial-BECs
+
+# It is worth also just performing a global DE testing
+* BECs vs PECs (regardless of subtype)
+
+
+```{r load_lib, message=FALSE}
+library(Seurat) 
+library(dplyr)
+library(scater)
+library(SingleCellExperiment)
+library(here)
+library(ggplot2)
+library(scran)
+library(stringr)
+library(gtools)
+library(scSorter)
+library(MAST)
+library(VennDetail)
+library(gridExtra)
+library(grid)
+library(fgsea)
+library(msigdbr)
+library(clusterProfiler)
+library(GSEABase)
+library(ensembldb)
+library(org.Hs.eg.db)
+library(enrichplot)
+library(ggsci)
+library(scales)
+```
+
+
+Pick colour paletts
+
+```{r, echo= FALSE}
+mypal <- pal_npg("nrc", alpha = 0.7)(10)
+mypal2 <-pal_tron("legacy", alpha = 0.7)(7)
+mypal3 <- pal_lancet("lanonc", alpha = 0.7)(9)
+mypal4 <- pal_simpsons(palette = c("springfield"), alpha = 0.7)(16)
+mypal5 <- pal_rickandmorty(palette = c("schwifty"), alpha = 0.7)(6)
+mypal6 <- pal_futurama(palette = c("planetexpress"), alpha = 0.7)(5)
+mypal7 <- pal_startrek(palette = c("uniform"), alpha = 0.7)(5)
+mycoloursP<- c(mypal, mypal2, mypal3, mypal4, mypal5, mypal6, mypal7)
+show_col(mycoloursP, labels =F)
+```
+
+
+#Load integrated BEC and PEC object
+```{r}
+EC.comb <- readRDS(here("data/BEC_PEC.RDS"))
+
+DefaultAssay(EC.comb) <- "RNA"
+
+Idents(EC.comb) <- "sub_tis"
+```
+
+
+#Direct comparison of BEC and PEC according to subtype
+
+* Capillary BEC vs Capillary PEC
+* Arterial BEC vs Arterial PEC
+* Vein BEC vs Vein PEC
+
+
+```{r}
+DEG_capi <- FindMarkers(EC.comb, ident.1 = "Capillary-BEC", ident.2 = "Capillary-PEC", test.use = "MAST", logfc.threshold = 1, min.pct = 0.5, verbose = FALSE)
+
+DEG_capi_up <- DEG_capi[DEG_capi$p_val_adj < 0.05 & DEG_capi$avg_log2FC > 1 & (DEG_capi$pct.1 - DEG_capi$pct.2) > 0.5,]
+
+DEG_capi_up
+
+DEG_capi_down <- DEG_capi[DEG_capi$p_val_adj < 0.05 & DEG_capi$avg_log2FC < -1 & (DEG_capi$pct.1 - DEG_capi$pct.2) < -0.5,]
+
+DEG_capi_down
+```
+
+
+```{r}
+DEG_art <- FindMarkers(EC.comb, ident.1 = "Arterial-BEC", ident.2 = "Arterial-PEC", test.use = "MAST", logfc.threshold = 1, min.pct = 0.5, verbose = FALSE)
+
+DEG_art_up <- DEG_art[DEG_art$p_val_adj < 0.05 & DEG_art$avg_log2FC > 1 & (DEG_art$pct.1 - DEG_art$pct.2) > 0.5,]
+
+DEG_art_up
+
+DEG_art_down <- DEG_art[DEG_art$p_val_adj < 0.05 & DEG_art$avg_log2FC < -1 & (DEG_art$pct.1 - DEG_art$pct.2) < -0.5,]
+
+DEG_art_down
+```
+
+
+```{r}
+DEG_vein <- FindMarkers(EC.comb, ident.1 = "Vein-BEC", ident.2 = "Vein-PEC", test.use = "MAST", logfc.threshold = 1, min.pct = 0.5, verbose = FALSE)
+
+DEG_vein_up <- DEG_vein[DEG_vein$p_val_adj < 0.05 & DEG_vein$avg_log2FC > 1 & (DEG_vein$pct.1 - DEG_vein$pct.2) > 0.5,]
+
+DEG_vein_up
+
+DEG_vein_down <- DEG_vein[DEG_vein$p_val_adj < 0.05 & DEG_vein$avg_log2FC < -1 & (DEG_vein$pct.1 - DEG_vein$pct.2) < -0.5,]
+
+DEG_vein_down
+```
+
+
+```{r}
+all_DEGs <- rbind(DEG_capi_up, DEG_art_up, DEG_vein_up, DEG_capi_down, DEG_art_down, DEG_vein_down)
+```
+
+
+#Plot Heatmap
+```{r}
+my_levels <- c("Capillary-BEC", "Arterial-BEC", "Vein-BEC", "Capillary-PEC", "Arterial-PEC", "Vein-PEC")
+EC.comb$sub_tis <- factor(x = EC.comb$sub_tis, levels = my_levels)
+
+Idents(EC.comb) <- "sub_tis"
+        
+EC.comb <- ScaleData(EC.comb, features = rownames(EC.comb), verbose = FALSE)
+
+ec.downsample <- subset(EC.comb, downsample= 50)
+        
+heatmap <- DoHeatmap(EC.comb, features = rownames(all_DEGs), label = TRUE, cells = Cells(ec.downsample), size = 3) + scale_fill_viridis_b(option = "viridis")
+
+heatmap + theme(axis.text.y = element_text(size = 0)) 
+```
+
+
+# Generate DEG table
+
+Generate the top 10 DEGs for each subtype between BEC and PEC
+```{r}
+deg_cap_top10 <- DEG_capi_up[1:10,]
+deg_cap_down10 <- DEG_capi_down[1:10,]
+capillary_degs <- c(rownames(deg_cap_top10), rownames(deg_cap_down10))
+
+deg_art_top10 <- DEG_art_up[1:10,]
+deg_art_down10 <- DEG_art_down[1:10,]
+arterial_degs <- c(rownames(deg_art_top10), rownames(deg_art_down10))
+
+deg_vein_top10 <- DEG_vein_up[1:10,]
+deg_vein_down10 <- DEG_vein_down[c(1,2,3,4,5,7,11,12,14,15),]
+vein_degs <- c(rownames(deg_vein_top10), rownames(deg_vein_down10))
+
+deg.table <- data.frame(capillary_degs, arterial_degs, vein_degs)
+colnames(deg.table) <- c("Capillary", "Arterial", "Vein")
+
+deg.table
+deg.table <- as.matrix(deg.table)
+```
+
+
+#Output DEG table
+```{r}
+t1 <- ttheme_default(
+        #Set color for table holding DEGs
+        core=list(
+        bg_params = list(fill=c(rep("peachpuff3",
+                                    length.out=10), rep("slategray3", length.out=10)),
+                         col = c(rep("peachpuff3",
+                                    length.out=10), rep("slategray3", length.out=10)))),
+        #Change column header to 
+        colhead = list(fg_params=list(col="white"),
+                       bg_params=list(fill = "dimgrey", col = "dimgrey"))
+        ) 
+
+
+grid.table(deg.table[,1:3], theme = t1)
+```
+
+
+#####PERFORM GSEA####
+
+
+# GO analysis of brain markers for each subtype
+```{r}
+hs <- org.Hs.eg.db
+```
+
+
+```{r}
+deg_capi_brain <- DEG_capi_up$avg_log2FC
+
+names(deg_capi_brain) <- toupper(rownames(DEG_capi_up))
+
+deg_capi_brain <- sort(deg_capi_brain, decreasing = T)
+
+deg_capi_brain_entrez <- select(hs, keys = names(deg_capi_brain), columns = "ENTREZID", keytype =  "SYMBOL")
+```
+
+
+#GO analysis on capillary DEGs
+```{r}
+deg_capi_kk <- enrichGO(gene =deg_capi_brain_entrez$ENTREZID, OrgDb = hs, pvalueCutoff = 0.05, ont = "BP")
+
+deg_capi_kk <- setReadable(deg_capi_kk, OrgDb = hs, keyType = "ENTREZID")
+
+deg_capi_readable <- as.data.frame(deg_capi_kk)
+
+barplot(deg_capi_kk, showCategory = 10)
+
+#Show GO result of the terms of interest and are significant after multiple correction
+barplot(deg_capi_kk, showCategory = deg_capi_kk@result$Description[c(3,5,7,10,21)], color = "qvalue") + ggtitle("Capillary Brain EC signature") + theme(plot.title = element_text(hjust = 0.5, face = "bold"), axis.text.y.left = element_text(size = 8.5)) + xlab("Gene count")
+```
+
+
+#GO analysis on arterial DEGs
+```{r}
+deg_art_brain <- DEG_art_up$avg_log2FC
+
+names(deg_art_brain) <- toupper(rownames(DEG_art_up))
+
+deg_art_brain <- sort(deg_art_brain, decreasing = T)
+
+deg_art_brain_entrez <- select(hs, keys = names(deg_art_brain), columns = "ENTREZID", keytype =  "SYMBOL")
+```
+
+
+```{r}
+deg_art_kk <- enrichGO(gene =deg_art_brain_entrez$ENTREZID, OrgDb = hs, pvalueCutoff = 0.05, ont = "BP")
+
+deg_art_kk <- setReadable(deg_art_kk, OrgDb = hs, keyType = "ENTREZID")
+
+deg_art_readable <- as.data.frame(deg_art_kk)
+
+barplot(deg_art_kk, showCategory = 10)
+
+barplot(deg_art_kk, showCategory = deg_art_kk@result$Description[c(2, 3, 4, 5, 8, 17)], color = "qvalue") + ggtitle("Arterial Brain EC signature") + theme(plot.title = element_text(hjust = 0.5, face = "bold"), axis.text.y.left = element_text(size = 8.5)) + xlab("Gene count")
+
+art_GO_of_interest <- dplyr::filter(deg_art_kk, p.adjust > 0.0014985, p.adjust < 0.014508364)
+```
+
+
+#GO on vein BECs
+```{r}
+deg_vein_brain <- DEG_vein_up$avg_log2FC
+
+names(deg_vein_brain) <- toupper(rownames(DEG_vein_up))
+
+deg_vein_brain <- sort(deg_vein_brain, decreasing = T)
+
+deg_vein_brain_entrez <- select(hs, keys = names(deg_vein_brain), columns = "ENTREZID", keytype =  "SYMBOL")
+```
+
+
+```{r}
+deg_vein_kk <- enrichGO(gene =deg_vein_brain_entrez$ENTREZID, OrgDb = hs, pvalueCutoff = 0.05, ont = "BP")
+
+deg_vein_kk <- setReadable(deg_vein_kk, OrgDb = hs, keyType = "ENTREZID")
+
+deg_vein_readable <- as.data.frame(deg_vein_kk)
+
+barplot(deg_vein_kk, showCategory = deg_vein_kk@result$Description[c(1, 2, 3, 5, 6)], color = "qvalue") + ggtitle("Vein Brain EC signature") + theme(plot.title = element_text(hjust = 0.5, face = "bold"), axis.text.y.left = element_text(size = 8.5)) + xlab("Gene count")
+
+vein_GO_of_interest <- dplyr::filter(deg_vein_kk, p.adjust < 0.035)
+```
+
+
+
+# From the GO analysis, we found that there is a global endothelial upregulation of various molecule transport genes
+
+* Generate violin plot to see how these genes are upregulated in BEC vs PEC
+
+* Xenobiotic transport
+
+```{r}
+abcb1 <- VlnPlot(EC.comb, features = "ABCB1") & scale_fill_manual(values = mycoloursP[c(1,6,15,16,20,22)]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+abcg2 <- VlnPlot(EC.comb, features = "ABCG2") & scale_fill_manual(values = mycoloursP[c(1,6,15,16,20,22)]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+slc2a1 <- VlnPlot(EC.comb, features = "SLC2A1") & scale_fill_manual(values = mycoloursP[c(1,6,15,16,20,22)]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+slc7a5 <- VlnPlot(EC.comb, features = "SLC7A5") & scale_fill_manual(values = mycoloursP[c(1,6,15,16,20,22)]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+gridExtra::grid.arrange(abcb1, abcg2, slc2a1, slc7a5, nrow = 4) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+```
+
+
+* Amino acid transport
+
+```{r}
+slc7a1 <- VlnPlot(EC.comb, features = "SLC7A1") & scale_fill_manual(values = mycoloursP[20:60]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+slc7a11 <- VlnPlot(EC.comb, features = "SLC7A11") & scale_fill_manual(values = mycoloursP[20:60]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+slc1a1 <- VlnPlot(EC.comb, features = "SLC1A1") & scale_fill_manual(values = mycoloursP[20:60]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+gridExtra::grid.arrange(slc7a1, slc7a11, slc1a1, nrow = 4)
+```
+
+
+* Lipid transport
+
+```{r}
+atp10a <- VlnPlot(EC.comb, features = "ATP10A") & scale_fill_manual(values = mycoloursP[43:60]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+ncoa1 <- VlnPlot(EC.comb, features = "NCOA1") & scale_fill_manual(values = mycoloursP[43:60]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+esyt2 <- VlnPlot(EC.comb, features = "ESYT2") & scale_fill_manual(values = mycoloursP[43:60]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks.y = element_blank(), axis.line.y = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+gridExtra::grid.arrange(atp10a, ncoa1, esyt2, nrow = 4)
+```
+
+
+##########################################################################
+
+#Now, gene ontology is performed on the lung-EC markers
+
+#Capillary lung marker GO
+```{r}
+deg_capi_lung <- DEG_capi_down$avg_log2FC
+
+names(deg_capi_lung) <- toupper(rownames(DEG_capi_down))
+
+deg_capi_lung <- sort(deg_capi_lung, decreasing = T)
+
+deg_capi_lung_entrez <- select(hs, keys = names(deg_capi_lung), columns = "ENTREZID", keytype =  "SYMBOL")
+```
+
+
+```{r}
+deg_capi_kk2 <- enrichGO(gene =deg_capi_lung_entrez$ENTREZID, OrgDb = hs, pvalueCutoff = 0.05, ont = "BP")
+
+deg_capi_kk2 <- setReadable(deg_capi_kk2, OrgDb = hs, keyType = "ENTREZID")
+
+deg_capi_readable2 <- as.data.frame(deg_capi_kk2)
+
+barplot(deg_capi_kk2, showCategory = 10)
+
+#Show GO result of the terms of interest and are significant after multiple correction
+barplot(deg_capi_kk2, x = "count", showCategory = deg_capi_kk2@result$Description[c(17, 29, 30, 33, 34)], color = "qvalue") + ggtitle("Capillary Lung EC signature") + theme(plot.title = element_text(hjust = 0.5, face = "bold"), axis.text.y.left = element_text(size = 8.5)) + scale_fill_viridis_b(option = "viridis") + xlab("Gene count")
+```
+
+
+#Arterial lung marker GO
+```{r}
+deg_art_lung <- DEG_art_down$avg_log2FC
+
+names(deg_art_lung) <- toupper(rownames(DEG_art_down))
+
+deg_art_lung <- sort(deg_art_lung, decreasing = T)
+
+deg_art_lung_entrez <- select(hs, keys = names(deg_art_lung), columns = "ENTREZID", keytype =  "SYMBOL")
+```
+
+
+```{r}
+deg_art_kk2 <- enrichGO(gene =deg_art_lung_entrez$ENTREZID, OrgDb = hs, pvalueCutoff = 0.05, ont = "BP")
+
+deg_art_kk2 <- setReadable(deg_art_kk2, OrgDb = hs, keyType = "ENTREZID")
+
+deg_art_readable2 <- as.data.frame(deg_art_kk2)
+
+barplot(deg_art_kk2, showCategory = 10)
+
+#Show GO result of the terms of interest and are significant after multiple correction
+barplot(deg_art_kk2, x = "count", showCategory = deg_art_kk2@result$Description[c(22, 28, 31, 43, 44)], color = "qvalue") + ggtitle("Arterial Lung EC signature") + theme(plot.title = element_text(hjust = 0.5, face = "bold"), axis.text.y.left = element_text(size = 8.5)) + scale_fill_viridis_b(option = "viridis") + xlab("Gene count")
+```
+
+
+#Vein lung marker GO
+```{r}
+deg_vein_lung <- DEG_vein_down$avg_log2FC
+
+names(deg_vein_lung) <- toupper(rownames(DEG_vein_down))
+
+deg_vein_lung <- sort(deg_vein_lung, decreasing = T)
+
+deg_vein_lung_entrez <- select(hs, keys = names(deg_vein_lung), columns = "ENTREZID", keytype =  "SYMBOL")
+```
+
+
+```{r}
+deg_vein_kk2 <- enrichGO(gene =deg_vein_lung_entrez$ENTREZID, OrgDb = hs, pvalueCutoff = 0.05, ont = "BP")
+
+deg_vein_kk2 <- setReadable(deg_vein_kk2, OrgDb = hs, keyType = "ENTREZID")
+
+deg_vein_readable2 <- as.data.frame(deg_vein_kk2)
+
+barplot(deg_vein_kk2, showCategory = 10)
+
+#Show GO result of the terms of interest and are significant after multiple correction
+barplot(deg_vein_kk2, x = "count", showCategory = deg_vein_kk2@result$Description[c(27, 31, 32, 62,63)], color = "qvalue") + ggtitle("Vein Lung EC signature") + theme(plot.title = element_text(hjust = 0.5, face = "bold"), axis.text.y.left = element_text(size = 8.5)) + scale_fill_viridis_b(option = "viridis") + xlab("Gene count")
+```
+
+
+# From the GO analysis, we found that there is a global endothelial upregulation of viral response genes
+
+* Generate violin plot to see how these genes are upregulated in PEC vs BEC
+
+* Negative regulation of viral entry into host cell
+```{r}
+hla_drb1 <- VlnPlot(EC.comb, features = "HLA-DRB1") & scale_fill_manual(values = mycoloursP[c(1,2,3,8,16,21 )]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+ifitm2 <- VlnPlot(EC.comb, features = "IFITM2") & scale_fill_manual(values = mycoloursP[c(1,2,3,8,16,21 )]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+fcn3 <- VlnPlot(EC.comb, features = "FCN3") & scale_fill_manual(values = mycoloursP[c(1,2,3,8,16,21 )]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+ifitm3 <- VlnPlot(EC.comb, features = "IFITM3") & scale_fill_manual(values = mycoloursP[c(1,2,3,8,16,21 )]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+
+gridExtra::grid.arrange(hla_drb1, ifitm2, fcn3, ifitm3, nrow = 4)
+```
+
+
+* Negative regulation of viral processes
+
+```{r}
+clta <- VlnPlot(EC.comb, features = "CLTA") & scale_fill_manual(values = mycoloursP[24:60]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+ctsd <- VlnPlot(EC.comb, features = "CTSD") & scale_fill_manual(values = mycoloursP[24:60]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+hla_drb5 <- VlnPlot(EC.comb, features = "HLA-DRB5") & scale_fill_manual(values = mycoloursP[24:60]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+hla_b <- VlnPlot(EC.comb, features = "HLA-B") & scale_fill_manual(values = mycoloursP[24:60]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+gridExtra::grid.arrange(clta, ctsd, hla_drb5, hla_b, nrow = 4)
+```
+
+
+* Antigen processing and presentation of exogenous antigen
+
+EEF1A1/S100A11/NME2/ATP6V0C/PPIA
+
+```{r}
+eef1a1 <- VlnPlot(EC.comb, features = "EEF1A1") & scale_fill_manual(values = mycoloursP[43:60]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+s100a11 <- VlnPlot(EC.comb, features = "S100A11") & scale_fill_manual(values = mycoloursP[43:60]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+nme2 <- VlnPlot(EC.comb, features = "NME2") & scale_fill_manual(values = mycoloursP[43:60]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+atp6v0c <- VlnPlot(EC.comb, features = "ATP6V0C") & scale_fill_manual(values = mycoloursP[43:60]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+ppia <- VlnPlot(EC.comb, features = "PPIA") & scale_fill_manual(values = mycoloursP[43:60]) & theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks.y = element_blank(), axis.line.y = element_blank(), plot.title = element_blank(), axis.text.x.bottom = element_blank()) & NoLegend()
+
+gridExtra::grid.arrange(eef1a1, s100a11, ppia, nrow = 4)
+```
+
+
+#Control for expression between BEC and PEC
+```{r}
+cldn5 <- VlnPlot(EC.comb, features = "CLDN5", pt.size = 0) & NoLegend()
+
+pecam1 <- VlnPlot(EC.comb, features = "PECAM1", pt.size = 0) & NoLegend()
+
+vwf <- VlnPlot(EC.comb, features = "VWF", pt.size = 0) & NoLegend()
+
+gridExtra::grid.arrange(cldn5, pecam1, vwf, nrow = 3)
+```
