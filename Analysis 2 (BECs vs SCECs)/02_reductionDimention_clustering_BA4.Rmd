@@ -1,6 +1,6 @@
 ---
 title: "Distinguish endothelial cells and pericytes in BA4 endo-pericyte populations"
-author: "B180131"
+author: "B180131 dissertation"
 date: "21/05/2021"
 output: html_document
 ---

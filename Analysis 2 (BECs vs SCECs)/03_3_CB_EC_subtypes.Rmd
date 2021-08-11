@@ -1,6 +1,6 @@
 ---
 title: "Subset cerebellum endothelial cells"
-author: "B180131"
+author: "B180131 dissertation"
 date: "18/06/2021"
 output: html_document
 ---

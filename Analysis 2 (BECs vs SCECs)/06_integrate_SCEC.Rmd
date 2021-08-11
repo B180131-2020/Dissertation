@@ -1,6 +1,6 @@
-z---
+---
 title: "Merge SCEC population"
-author: "B180131"
+author: "B180131 dissertation"
 date: "16/06/2021"
 output: html_document
 ---

@@ -1,6 +1,6 @@
 ---
 title: "External SCEC Dataset 2"
-author: "B180131"
+author: "B180131 dissertation"
 date: "15/06/2021"
 output: html_document
 ---

@@ -1,6 +1,6 @@
 ---
 title: "Identify EC subtypes in CSC"
-author: "B180131"
+author: "B180131 dissertation"
 date: "27/05/2021"
 output: html_document
 ---
