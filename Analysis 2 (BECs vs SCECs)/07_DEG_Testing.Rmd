@@ -1,6 +1,6 @@
 ---
 title: "SCEC and BEC Differential Expression Testing"
-author: "Bono"
+author: "B180131"
 date: "12/06/2021"
 output: html_document
 ---

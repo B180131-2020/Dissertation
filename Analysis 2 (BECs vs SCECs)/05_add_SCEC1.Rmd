@@ -1,6 +1,6 @@
 ---
 title: "External SCEC Dataset 1"
-author: "Bono"
+author: "B180131"
 date: "15/06/2021"
 output: html_document
 ---

@@ -1,6 +1,6 @@
 ---
 title: "Mouse SCEC subtypes"
-author: "Bono"
+author: "B180131"
 date: "17/06/2021"
 output: html_document
 ---

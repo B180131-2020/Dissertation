@@ -1,6 +1,6 @@
 ---
 title: "Identify EC subtypes in BA4"
-author: "Bono"
+author: "B180131"
 date: "27/05/2021"
 output: html_document
 ---
