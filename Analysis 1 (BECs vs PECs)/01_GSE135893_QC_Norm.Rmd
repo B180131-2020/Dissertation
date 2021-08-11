@@ -1,6 +1,6 @@
 ---
 title: "GSE135893 (Public lung dataset)"
-author: "B180131"
+author: "B180131 dissertation"
 date: "30/06/2021"
 output: html_document
 ---

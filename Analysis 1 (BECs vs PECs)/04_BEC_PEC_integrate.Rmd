@@ -1,6 +1,6 @@
 ---
 title: "Integrate pulmonary ECs with BECs (BA4 & CB)"
-author: "B180131"
+author: "B180131 dissertation"
 date: "04/07/2021"
 output: html_document
 ---

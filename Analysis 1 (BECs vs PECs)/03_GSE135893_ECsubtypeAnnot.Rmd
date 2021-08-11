@@ -1,6 +1,6 @@
 ---
 title: "Subtype annotaiton of pulmonary ECs"
-author: "B180131"
+author: "B180131 dissertation"
 date: "03/07/2021"
 output: html_document
 ---
